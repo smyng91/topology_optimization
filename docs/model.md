@@ -264,13 +264,16 @@ This is enforced every iteration, not with a Lagrange multiplier:
 1. The descent direction is mean-zero: \(g\leftarrow g-\mathrm{mean}(g)\),
    then normalized by \(\|g\|_\infty\).
 2. A projected step \(\gamma\leftarrow\mathrm{clip}(\gamma-\ell\,g,0,1)\)
-   with move limit \(\ell\) (`--lr`, default \(0.2\)).
+   with a \(\beta\)-damped move limit \(\ell=\ell_0/\sqrt{\max(\beta,1)}\)
+   (`--lr` is \(\ell_0\), the \(\beta=1\) move; default \(0.2\)).
 3. A 24-step bisection finds a shift \(c\) such that
    \(\mathrm{mean}\bigl(\bar\gamma(\mathrm{clip}(\gamma-c,0,1))\bigr)=v^\*\).
 
 Darcy does **not** force port cells to fluid. Stokes keeps a one-cell
 fluid layer on the pressure ports after each volume projection — a
-single solid cell there seals the opening.
+single solid cell there seals the opening. That pin, together with a
+mid-height channel seed, is required for a through-channel: from a
+uniform field the local step prefers an inlet cavity.
 
 ## 6. Discrete adjoint and JAX
 
@@ -308,19 +311,33 @@ design \(\gamma\).
 
 ## 7. Optimizer
 
-Projected gradient descent with \(\beta\)-continuation.
+Projected gradient descent with \(\beta\)-continuation, a decaying move
+limit, and keep-best.
 
 1. Initialize \(\gamma\) near \(v^\*\) plus uniform noise of amplitude
-   \(0.08\), then enforce the volume constraint at \(\beta=1\).
+   \(0.08\). Flow problems replace that with a mid-height open duct
+   (fluid band of height `port_frac`) plus the same noise — required for
+   Stokes, and used for Darcy as well. Then enforce the volume constraint
+   at \(\beta=1\), and (Stokes only) pin port cells to fluid.
 2. For iteration \(i=1,\ldots,N\) (default \(N=80\)):
    - set \(\beta\) from the continuation schedule;
-   - enforce volume;
+   - enforce volume (and Stokes port pin);
    - evaluate \(J\) and \(\nabla_\gamma(-J)\) with a JIT
      `value_and_grad`;
-   - take a mean-zero projected step of size \(\ell\);
+   - take a mean-zero projected step of size
+     \(\ell=\ell_0/\sqrt{\max(\beta,1)}\);
    - enforce volume again.
-3. Write `history.json`, `state_*.npz`, PNG slices, and a VTK file of
-   cell-centered \(\bar\gamma\), \(T\), \(|\mathbf{u}|\), and \(p\).
+   Diagnostics from `analyze` aux are printed each iteration: energy
+   residual RMS, \(\|\nabla\cdot\mathbf{u}\|_{\mathrm{rms}}\), port mass
+   error, and grayness. A warning is issued (no abort) if the energy
+   residual RMS exceeds \(10^{-2}\) or, when flow is on, the port mass
+   error exceeds \(0.15\).
+3. Keep the design with the largest \(J\). Write `history.json`,
+   `run.json` (serializable params, \(J_0\), \(J_{\mathrm{final}}\),
+   \(J_{\mathrm{best}}\), last diagnostics), `state_best.npz`,
+   `state_final.npz`, PNG slices, and a VTK file of cell-centered
+   \(\bar\gamma\), \(T\), \(|\mathbf{u}|\), and \(p\). The optimize
+   return value is the **best-\(J\)** design.
 
 There is no MMA / IPOPT / optimality-criteria loop. The volume equality
 is a hard projection, not a penalty.
@@ -340,7 +357,7 @@ is a hard projection, not a penalty.
 | Projection threshold | \(\eta\) | \(0.5\) |
 | Max projection | `--beta-max` | \(32\) |
 | Iterations | `--iters` | \(80\) |
-| Move limit | `--lr` | \(0.2\) |
+| Move limit at \(\beta=1\) | `--lr` \(\ell_0\) | \(0.2\) (\(\ell=\ell_0/\sqrt{\beta}\)) |
 | Port / sink fraction | `--port-frac` | \(0.5\) |
 | Inlet / Darcy pressure | \(p_{\mathrm{in}}\) | \(1\) |
 | Stokes pressure drop | `stokes_dp` | \(20\) |
@@ -372,9 +389,12 @@ check, not a crisp-design run.
 - **Iterative solves** are capped. Poorly conditioned high-\(\beta\)
   designs can leave a nonzero residual.
 - **Conduction at high \(\beta\).** With a volume source and a small
-  sink, \(J=-\mathrm{mean}(T)\) can oscillate once the projection
-  becomes sharp (\(\beta\gtrsim 16\)). Volume stays at \(v^\*\); the
-  objective is the quantity that chatters.
+  sink, \(J=-\mathrm{mean}(T)\) can still oscillate once the projection
+  becomes sharp (\(\beta\gtrsim 16\)). The \(\beta\)-damped move limit
+  and keep-best reduce the chatter that reaches the returned design;
+  volume stays at \(v^\*\).
+- **Blocked flow, no conduction sink.** Flow modes have no cold patch.
+  A sealed design can run \(T\) away; the energy residual will warn.
 - **Uniform \(q\).** Heat rejected is design-independent, so “maximize
   heat transfer” is the wrong default objective for this setup.
 - **No property coupling** beyond \(\gamma\): \(k\), \(\alpha\), and

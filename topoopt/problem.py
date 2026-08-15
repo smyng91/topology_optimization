@@ -8,6 +8,7 @@ import jax.numpy as jnp
 
 from topoopt.config import ColdPlateParams
 from topoopt.darcy import solve_darcy
+from topoopt.diagnostics import field_diagnostics
 from topoopt.filter import helmholtz_filter
 from topoopt.flow2d import solve_flow
 from topoopt.grid import take_axis, zero_face_velocity
@@ -42,7 +43,7 @@ def analyze(gamma_raw, beta: float, params: ColdPlateParams) -> tuple[Any, dict[
     face_vel, pressure, temperature = solve_fields(phys, params)
     heat = total_heat_transfer(phys, temperature, params)
     speed = _cell_speed(face_vel)
-    return heat, {
+    aux = {
         "phys": phys,
         "face_vel": face_vel,
         "p": pressure,
@@ -50,6 +51,8 @@ def analyze(gamma_raw, beta: float, params: ColdPlateParams) -> tuple[Any, dict[
         "speed": speed,
         "V": jnp.mean(phys),
     }
+    aux.update(field_diagnostics(phys, face_vel, pressure, temperature, speed, params))
+    return heat, aux
 
 
 def _cell_speed(face_vel):

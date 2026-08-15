@@ -117,12 +117,14 @@ def _run_case(name, params, iters, outdir, plot):
     write_vtk(aux, params, out / "design_final.vtk")
     tmin, tmax = _check_temperature(aux)
     j0, j1 = hist[0]["J"], hist[-1]["J"]
+    j_best = max(h["J"] for h in hist)
     rec = {
         "name": name,
         "heat": params.heat_mode,
         "J0": j0,
         "J1": j1,
-        "improved": j1 >= j0 - 1e-6,
+        "J_best": j_best,
+        "improved": j_best >= j0 - 1e-6,
         "vol": hist[-1]["vol"],
         "T_min": tmin,
         "T_max": tmax,

@@ -102,3 +102,44 @@ def test_stokes_2d_residual_small_on_solve():
     temp = solve_energy(gamma, [u, v], params)
     assert np.isfinite(float(temp.mean()))
     assert float(temp.min()) >= -1e-6
+
+
+def test_stokes_2d_adjoint_matches_fd():
+    """Residual Stokes adjoint vs central FD on a tiny mesh.
+
+    Uzawa is inexact, so this is a sign / coarse relative-error check.
+    """
+    params = default_2d(
+        nx=8,
+        ny=8,
+        heat_mode="both",
+        flow_model="stokes",
+        flow_iters=40,
+        uzawa_iters=80,
+        heat_iters=150,
+        filter_iters=40,
+    )
+    gamma = jnp.clip(jnp.full(params.n, params.vol_frac) + 0.03, 0.0, 1.0)
+
+    def obj(g):
+        return analyze(g, 2.0, params)[0]
+
+    j, grad = jax.value_and_grad(obj)(gamma)
+    assert np.isfinite(float(j))
+    assert grad.shape == gamma.shape
+    assert np.isfinite(np.asarray(grad)).all()
+
+    samples = [(2, 2), (4, 3), (5, 4)]
+    x0 = np.asarray(gamma)
+    eps = 5e-4
+    for idx in samples:
+        xp, xm = x0.copy(), x0.copy()
+        xp[idx] += eps
+        xm[idx] -= eps
+        fd = (float(obj(jnp.asarray(xp))) - float(obj(jnp.asarray(xm)))) / (2.0 * eps)
+        analytic = float(np.asarray(grad)[idx])
+        if abs(analytic) + abs(fd) < 1e-6:
+            continue
+        rel = abs(analytic - fd) / (abs(analytic) + abs(fd) + 1e-12)
+        assert np.sign(analytic) == np.sign(fd) or rel < 0.7
+        assert rel < 0.7, (idx, analytic, fd, rel)

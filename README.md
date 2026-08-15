@@ -8,6 +8,13 @@ heat-source patches. Sensitivities are discrete global adjoints.
 The model (physics, discretization, adjoint, optimizer) is in
 [docs/model.md](docs/model.md).
 
+## Research v0.2
+
+Each iteration logs energy residual RMS, `div_rms`, port mass error, and
+grayness (also stored in `analyze` aux). The move limit decays as
+`lr / sqrt(β)` and the run keeps the best-`J` design. A run writes
+`history.json`, `run.json`, `state_best.npz`, and `state_final.npz`.
+
 ## Install
 
 Python 3.10+ (3.12 recommended). From the repo root:
@@ -15,11 +22,12 @@ Python 3.10+ (3.12 recommended). From the repo root:
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[cpu]"
-pip install pytest
+pip install -e ".[cpu,dev]"
 ```
 
-`jax_enable_x64` is turned on when the package is imported.
+`[cpu]` pulls the CPU JAX extra; `[dev]` adds `pytest`. `jax_enable_x64`
+is turned on when the package is imported. Dependency ranges live in
+`pyproject.toml` (no lockfile).
 
 ## Run
 
@@ -49,9 +57,32 @@ Useful flags: `--heat`, `--flow {stokes,darcy}`, `--hot`, `--cold`, `--port-frac
 `--seed`, `--outdir`.
 
 Defaults: `--iters 80`, `--rmin 2.2`, `--beta-max 32`, `--vol 0.45`.
+`--lr` is the move at `β = 1` and decays as `1/sqrt(β)`.
+
+## Stokes notes
+
+Stokes is **pressure-driven** (`stokes_dp` on the left port, `p = 0` on the
+right). After each volume projection the optimizer pins a one-cell fluid
+layer on the port *design variables* (`keep_ports_open`) — that is a design
+projection, not a Dirichlet condition in the residual. A mid-height channel
+seed is required: from a uniform field the local step opens an inlet cavity
+and dams the outlet. Do not remove the seed or the port pin if you want a
+through-channel.
+
+## Diagnostics
+
+Every iteration prints `energy_rms`, `div_rms`, `mass_err`, and `gray`.
+A warning is issued (the run does not abort) if `energy_rms > 1e-2` or,
+when flow is on, `mass_err > 0.15`. Flow modes have no conduction sink —
+a blocked design can run `T` away.
 
 ## Tests
 
 ```bash
-MPLBACKEND=Agg python -m pytest tests/test_smoke.py tests/test_physics.py -q
+MPLBACKEND=Agg python -m pytest tests -q
 ```
+
+This is the same command GitHub Actions runs (`pip install -e ".[cpu,dev]"`
+on Python 3.12). The suite covers interpolation, Darcy/Stokes residuals,
+a coarse Stokes adjoint FD check, short conduction and Darcy optimizations,
+and the physics checks in `tests/test_physics.py`.

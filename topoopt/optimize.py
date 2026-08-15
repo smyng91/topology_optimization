@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from pathlib import Path
 
@@ -13,6 +14,19 @@ import numpy as np
 from topoopt.config import ColdPlateParams
 from topoopt.grid import port_mask
 from topoopt.problem import analyze, physical_density
+
+_DIAG_KEYS = (
+    "energy_rms",
+    "div_rms",
+    "mass_err",
+    "stokes_rel",
+    "gray",
+    "T_mean",
+    "T_max",
+    "speed_max",
+    "u_in",
+    "u_out",
+)
 
 
 def project_physical_volume(gamma_raw, beta, params: ColdPlateParams, target):
@@ -46,6 +60,11 @@ def projected_step(gamma, grad, move: float):
     g = grad - jnp.mean(grad)
     g = g / (jnp.max(jnp.abs(g)) + 1e-12)
     return jnp.clip(gamma - move * g, 0.0, 1.0)
+
+
+def move_limit(lr: float, beta: float) -> float:
+    """β-damped move: ``lr`` at β=1, ``lr / sqrt(β)`` for β>1."""
+    return lr / math.sqrt(max(float(beta), 1.0))
 
 
 def beta_schedule(n_iters: int, beta_max: float) -> jnp.ndarray:
@@ -110,16 +129,24 @@ def optimize(
         f"vol*={params.vol_frac}\n"
         f"  hot={params.hot_specs}  cold={params.cold_specs}"
     )
-    print(f"{'it':>4}  {'beta':>6}  {'J':>12}  {'vol':>8}  {'time':>7}")
+    print(
+        f"{'it':>4}  {'beta':>6}  {'J':>12}  {'vol':>8}  {'E_rms':>9}  "
+        f"{'div_rms':>9}  {'mass_err':>9}  {'gray':>6}  {'time':>7}"
+    )
 
     aux = None
+    best_J = -float("inf")
+    best_iter = 0
+    best_gamma = gamma
+    best_aux = None
     for it in range(1, n_iters + 1):
         beta = float(betas[it - 1])
         t0 = time.time()
         gamma = keep_ports_open(project_physical_volume(gamma, beta, params, params.vol_frac), params)
         (loss, (heat, aux)), grad = value_and_grad(gamma, beta)
-        gamma = keep_ports_open(
-            project_physical_volume(projected_step(gamma, grad, lr), beta, params, params.vol_frac),
+        move = move_limit(lr, beta)
+        gamma_next = keep_ports_open(
+            project_physical_volume(projected_step(gamma, grad, move), beta, params, params.vol_frac),
             params,
         )
         vol = float(aux["V"])
@@ -130,18 +157,86 @@ def optimize(
             "J": float(heat),
             "loss": float(loss),
             "vol": vol,
+            "move": move,
             "time": dt,
         }
+        for key in _DIAG_KEYS:
+            rec[key] = float(aux[key])
+        if float(heat) > best_J:
+            best_J = float(heat)
+            best_iter = it
+            best_gamma = gamma
+            best_aux = aux
+            _save_checkpoint(outdir, "best", best_gamma, best_aux, params)
+        rec["is_best"] = it == best_iter
         history.append(rec)
-        print(f"{it:4d}  {beta:6.1f}  {float(heat):12.6f}  {vol:8.4f}  {dt:7.2f}s")
+        print(
+            f"{it:4d}  {beta:6.1f}  {float(heat):12.6f}  {vol:8.4f}  "
+            f"{rec['energy_rms']:9.2e}  {rec['div_rms']:9.2e}  {rec['mass_err']:9.3f}  "
+            f"{rec['gray']:6.3f}  {dt:7.2f}s"
+        )
+        if rec["energy_rms"] > 1e-2:
+            print(f"  warning: energy residual RMS {rec['energy_rms']:.3e} > 1e-2")
+        if params.solves_flow and rec["mass_err"] > 0.15:
+            print(f"  warning: port mass error {rec['mass_err']:.3f} > 0.15")
         if callback is not None:
             callback(it, gamma, aux, rec)
         if it == 1 or it == n_iters or it % 10 == 0:
             _save_checkpoint(outdir, it, gamma, aux, params)
+        gamma = gamma_next
 
+    for rec in history:
+        rec["is_best"] = rec["iter"] == best_iter
     (outdir / "history.json").write_text(json.dumps(history, indent=2))
     _save_checkpoint(outdir, "final", gamma, aux, params)
-    return gamma, aux, history
+    _save_checkpoint(outdir, "best", best_gamma, best_aux, params)
+    _write_run_json(
+        outdir,
+        params,
+        n_iters=n_iters,
+        lr=lr,
+        beta_max=beta_max,
+        seed=seed,
+        history=history,
+        best_J=best_J,
+        best_iter=best_iter,
+    )
+    return best_gamma, best_aux, history
+
+
+def _params_json(params: ColdPlateParams) -> dict:
+    out = {}
+    for key, val in params._asdict().items():
+        out[key] = list(val) if isinstance(val, tuple) else val
+    return out
+
+
+def _write_run_json(outdir: Path, params: ColdPlateParams, **meta):
+    history = meta["history"]
+    last = history[-1]
+    payload = {
+        "params": _params_json(params),
+        "n_iters": meta["n_iters"],
+        "lr": meta["lr"],
+        "beta_max": meta["beta_max"],
+        "seed": meta["seed"],
+        "J0": history[0]["J"],
+        "J_final": last["J"],
+        "J_best": meta["best_J"],
+        "best_iter": meta["best_iter"],
+        "vol_final": last["vol"],
+        "energy_rms": last["energy_rms"],
+        "div_rms": last["div_rms"],
+        "mass_err": last["mass_err"],
+        "stokes_rel": last["stokes_rel"],
+        "gray": last["gray"],
+        "T_mean": last["T_mean"],
+        "T_max": last["T_max"],
+        "speed_max": last["speed_max"],
+        "u_in": last["u_in"],
+        "u_out": last["u_out"],
+    }
+    (outdir / "run.json").write_text(json.dumps(payload, indent=2))
 
 
 def _save_checkpoint(outdir: Path, tag, gamma, aux, params: ColdPlateParams):

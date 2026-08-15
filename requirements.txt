@@ -1,4 +1,4 @@
-jax>=0.4.30
-jaxlib>=0.4.30
-numpy>=1.26
-matplotlib>=3.8
+jax>=0.4.30,<0.13
+jaxlib>=0.4.30,<0.13
+numpy>=1.26,<3
+matplotlib>=3.8,<4

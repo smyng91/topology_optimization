@@ -30,7 +30,12 @@ def build_parser():
         default=0.5,
         help="Centered fraction of the left/right walls used as flow ports",
     )
-    p.add_argument("--lr", type=float, default=0.2, help="Design move limit per iteration")
+    p.add_argument(
+        "--lr",
+        type=float,
+        default=0.2,
+        help="Design move limit at β=1 (decays as lr/sqrt(β))",
+    )
     p.add_argument("--beta-max", type=float, default=32.0)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--outdir", type=str, default="outputs/2d")
@@ -65,7 +70,7 @@ def main(argv=None):
                 title=f"2D {params.heat_label}  it {it}  J={rec['J']:.4f}",
             )
 
-    _gamma, aux, _hist = optimize(
+    _gamma, aux, hist = optimize(
         params,
         n_iters=args.iters,
         lr=args.lr,
@@ -76,7 +81,8 @@ def main(argv=None):
     )
     plot_2d(aux, params, outdir / "design_final.png", title=f"2D final design ({params.heat_label})")
     write_vtk(aux, params, outdir / "design_final.vtk")
-    print(f"Wrote results to {outdir.resolve()}")
+    j_best = max(h["J"] for h in hist)
+    print(f"Wrote results to {outdir.resolve()}  J_best={j_best:.6f}  (best-J design)")
 
 
 if __name__ == "__main__":

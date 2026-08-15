@@ -93,6 +93,8 @@ def run_examples(root: str | Path = "outputs/examples"):
             "iters": iters,
             "J0": hist[0]["J"],
             "J1": hist[-1]["J"],
+            "J_best": max(h["J"] for h in hist),
+            "best_iter": next(h["iter"] for h in hist if h.get("is_best")),
             "vol": hist[-1]["vol"],
             "T_min": float(aux["T"].min()),
             "T_max": float(aux["T"].max()),
@@ -109,11 +111,11 @@ def run_examples(root: str | Path = "outputs/examples"):
     report = {"cases": records}
     (root / "report.json").write_text(json.dumps(report, indent=2))
     print("\n=== Example gallery ===")
-    print(f"{'case':<22} {'heat':<12} {'flow':<7} {'J0':>10} {'J1':>10} {'vol':>7} {'Tmean':>7}")
+    print(f"{'case':<22} {'heat':<12} {'flow':<7} {'J0':>10} {'J_best':>10} {'vol':>7} {'Tmean':>7}")
     for rec in records:
         print(
             f"{rec['name']:<22} {rec['heat']:<12} {rec['flow']:<7} "
-            f"{rec['J0']:10.4f} {rec['J1']:10.4f} {rec['vol']:7.3f} {rec['T_mean']:7.3f}"
+            f"{rec['J0']:10.4f} {rec['J_best']:10.4f} {rec['vol']:7.3f} {rec['T_mean']:7.3f}"
         )
     print(f"Wrote {root.resolve()}/report.json")
     return report
