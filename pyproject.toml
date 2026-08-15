@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "topoopt"
+version = "0.1.0"
+description = "JAX topology optimization of a 2-D heated box"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "jax>=0.4.30",
+    "jaxlib>=0.4.30",
+    "numpy>=1.26",
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+cpu = ["jax[cpu]"]
+
+[project.scripts]
+topoopt-2d = "topoopt.run2d:main"
+
+[tool.setuptools.packages.find]
+include = ["topoopt*"]

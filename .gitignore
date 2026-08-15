@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.env
+.python-version
+
+# Tests / type checkers
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Run artifacts
+outputs/
+*.npz
+*.vtk
+*.png
+
+# JAX / OS / editors
+.jax_cache/
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
