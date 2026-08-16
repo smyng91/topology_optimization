@@ -134,8 +134,11 @@ def main(argv=None):
         _gamma, aux, hist = optimize(params, n_iters=args.iters, callback=callback, **opt_kw)
     plot_2d(aux, params, outdir / "design_final.png", title=f"2D final design ({params.heat_label})")
     write_vtk(aux, params, outdir / "design_final.vtk")
-    j_best = max(h["J"] for h in hist)
-    print(f"Wrote results to {outdir.resolve()}  J_best={j_best:.6f}  (best-J design)")
+    best_rec = next(h for h in hist if h.get("is_best"))
+    print(
+        f"Wrote results to {outdir.resolve()}  "
+        f"J_best={best_rec['J']:.6f}  (β={best_rec['beta']:g} design)"
+    )
 
 
 if __name__ == "__main__":

@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
 """Write the committed snapshots under ``docs/figures/``.
 
-These are medium-short runs (not the 80×80 gallery) so the PNGs stay
-small enough to live in git. Re-run after a visual change::
+Medium-short runs (not the 80×80 gallery) so the PNGs stay small
+enough to live in git. All optimizing cases use ``lr=0.2``,
+``beta_max=8``, ``seed=0``:
+
+* ``analyze_gray.png`` — ``conduction_tree`` 24×24, ``analyze`` only
+* ``conduction_tree.png`` — 32×32, 20 iters
+* ``convection_darcy.png`` — 24×24, 12 iters
+* ``custom_faces.png`` — 24×24, 12 iters
+
+Re-run after a visual change::
 
     python examples/publish_figures.py
 """

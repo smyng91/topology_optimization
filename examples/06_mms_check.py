@@ -11,6 +11,14 @@ and print the relative L2 error.
 * Stokes–Poiseuille — full-height pressure-driven channel, ``α = 0``
   (skipped with ``--quick``)
 
+Parameters (built with ``params2d``, not a named factory): energy
+Poisson on n=8 and 16, all-wall ``T=0``, ``heat_iters=800``; Helmholtz
+cosine on n=16, ``rmin=2``, ``filter_iters=400``; Darcy on 16×16,
+``port_frac=1``, ``flow_iters=400``; Stokes–Poiseuille on n=12,
+``port_frac=1``, ``stokes_dp=20``, ``div_eps=1e-12``, Uzawa 40 / Schur
+200 (skipped with ``--quick``). Shared flags: ``--quick``, ``--outdir``,
+``--seed`` (seed unused).
+
 Run from the repo root::
 
     python examples/06_mms_check.py

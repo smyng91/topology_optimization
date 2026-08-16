@@ -11,6 +11,12 @@ Throughput is design-dependent — block the path and the flow drops.
 the volume source. The optimizer seeds a mid-height duct; from a uniform
 field the local step prefers an inlet cavity and an outlet dam.
 
+Parameters (on top of ``convection_darcy``: ``vol=0.45``, ``pe=40``,
+``rmin=2``, ``port_frac=0.5``, ``symmetry=y``, no cold patch): mesh
+32×32, 50 iters, ``β_max=16``, ``lr=0.2`` (``--quick``: 16×16, 8 iters,
+``β_max=8``); ``flow_iters=200``, ``heat_iters=300``,
+``filter_iters=60``. Shared flags: ``--quick``, ``--outdir``, ``--seed``.
+
 Run from the repo root::
 
     python examples/03_convection_darcy.py

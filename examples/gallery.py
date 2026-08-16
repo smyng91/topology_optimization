@@ -1,4 +1,9 @@
-"""Fine-mesh gallery of the named cases in ``examples/problems.py``."""
+"""Fine-mesh gallery of the named cases in ``examples/problems.py``.
+
+``optimize`` uses ``lr=0.12``, ``beta_max=32``, ``seed=0``. Full meshes:
+80×80 / 150–200 iters (Stokes 48×48 / 100, Uzawa 250). ``--quick`` is
+16×16 / 8 iters (Stokes 12×12 / 4). See ``examples/README.md``.
+"""
 
 from __future__ import annotations
 
@@ -93,8 +98,9 @@ def run_examples(root: str | Path = "outputs", quick: bool = False):
             "iters": iters,
             "J0": hist[0]["J"],
             "J1": hist[-1]["J"],
-            "J_best": max(h["J"] for h in hist),
+            "J_best": next(h["J"] for h in hist if h.get("is_best")),
             "best_iter": next(h["iter"] for h in hist if h.get("is_best")),
+            "J_peak": max(h["J"] for h in hist),
             "vol": hist[-1]["vol"],
             "T_min": float(aux["T"].min()),
             "T_max": float(aux["T"].max()),

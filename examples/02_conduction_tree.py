@@ -9,7 +9,15 @@ fins instead — try ``--wide-sink`` to see the difference.
 ``J = -mean(T)``. Volume is an equality (``mean(γ̄) = v*``), enforced
 by a mean-zero step plus a shift after the Helmholtz filter / tanh
 projection. ``β`` doubles during the run; the move limit decays as
-``lr / sqrt(β)``. The returned design is the best-``J`` iterate.
+``lr / sqrt(β)``. The returned design is the best-``J`` iterate at
+the highest ``β``, not the global max ``J`` across continuation
+(a gray ``β=4`` field is not a physical tree).
+
+Parameters (on top of ``conduction_tree``): mesh 100×100, 100 iters,
+``β_max=16``, ``lr=0.2`` (``--quick``: 16×16, 8 iters, ``β_max=8``);
+``heat_iters=300``, ``filter_iters=80``. ``--wide-sink`` replaces the
+8% patch with ``face:bottom:frac=0.5``. Shared flags: ``--quick``,
+``--outdir``, ``--seed``.
 
 Run from the repo root::
 
@@ -40,8 +48,8 @@ def main(argv=None):
     )
     args = p.parse_args(argv)
 
-    n = 16 if args.quick else 40
-    iters = 8 if args.quick else 60
+    n = 16 if args.quick else 100
+    iters = 8 if args.quick else 100
     sink = ("face:bottom:frac=0.5",) if args.wide_sink else TREE_SINK
     params = conduction_tree(nx=n, ny=n, cold_specs=sink, heat_iters=300, filter_iters=80)
     print(

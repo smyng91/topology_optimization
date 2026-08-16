@@ -19,6 +19,13 @@ The adjoint is the residual discrete adjoint, not an unrolled Uzawa loop.
 This tutorial uses a modest mesh. The gallery
 (``python examples/gallery.py``) runs 48×48 / 100 iterations.
 
+Parameters (on top of ``conjugate_stokes``: ``vol=0.45``, ``pe=40``,
+``rmin=2``, ``port_frac=0.5``, ``stokes_dp=20``, ``symmetry=y``,
+``stokes_kryl_iters=200``): mesh 24×24, 40 iters, ``β_max=16``,
+``lr=0.16`` (``--quick``: 16×16, 6 iters, ``β_max=8``);
+``uzawa_iters=40``, ``heat_iters=280``, ``filter_iters=60``. Shared
+flags: ``--quick``, ``--outdir``, ``--seed``.
+
 Run from the repo root::
 
     python examples/04_conjugate_stokes.py

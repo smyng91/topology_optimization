@@ -1,4 +1,4 @@
-# Pinned from the development venv (CPython 3.12, CPU JAX).
+# Pinned from the development venv (CPython 3.14, CPU JAX).
 # Install: pip install -r requirements-lock.txt
 # For NVIDIA GPUs use the pyproject [cuda] extra instead of these jax/jaxlib lines.
 jax==0.11.0
@@ -14,6 +14,10 @@ pillow==12.3.0
 pyparsing==3.3.2
 python-dateutil==2.9.0.post0
 six==1.17.0
+scipy==1.18.0
+ml_dtypes==0.6.0
+opt_einsum==3.4.0
 pytest==9.1.1
 iniconfig==2.3.0
 pluggy==1.6.0
+pygments==2.20.0

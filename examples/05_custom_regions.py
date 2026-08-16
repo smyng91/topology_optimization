@@ -12,6 +12,12 @@ patches. Spec strings are the same as the CLI ``--hot`` / ``--cold``:
 This script is a Dirichlet sandwich: hot top, cold bottom, no flow.
 Solid should form conducting bridges between the two faces.
 
+Parameters: mesh 32×32, 50 iters, ``β_max=16``, ``lr=0.2``
+(``--quick``: 16×16, 8 iters, ``β_max=8``); ``heat_iters=300``,
+``filter_iters=60``. Default factory ``custom_faces`` (``vol=0.40``,
+``q=0``, ``symmetry=x``). ``--boxes`` switches to ``custom_boxes``
+(no symmetry). Shared flags: ``--quick``, ``--outdir``, ``--seed``.
+
 Run from the repo root::
 
     python examples/05_custom_regions.py

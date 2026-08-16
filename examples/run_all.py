@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Run every tutorial in order.
+"""Run every tutorial in order (01–06).
+
+``--quick`` is forwarded to each script. ``--only 01 06`` filters by
+basename. Meshes and iteration counts are in ``examples/README.md``.
 
 From the repo root::
 
@@ -37,7 +40,11 @@ def main(argv=None):
             continue
         print(f"\n======== {name} ========\n")
         sys.argv = [str(HERE / name), *extra]
-        runpy.run_path(str(HERE / name), run_name="__main__")
+        try:
+            runpy.run_path(str(HERE / name), run_name="__main__")
+        except SystemExit as exc:
+            if exc.code not in (0, None):
+                raise
     return 0
 
 

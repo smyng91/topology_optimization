@@ -93,14 +93,20 @@ def optimize_and_save(
         outdir=outdir,
         callback=callback,
     )
-    plot_2d(aux, params, outdir / "design_final.png", title=f"{label}  best-J design")
+    best_rec = next(h for h in hist if h.get("is_best"))
+    plot_2d(
+        aux,
+        params,
+        outdir / "design_final.png",
+        title=f"{label}  β={best_rec['beta']:g}  J={best_rec['J']:.4f}",
+    )
     write_vtk(aux, params, outdir / "design_final.vtk")
-    j_best = max(h["J"] for h in hist)
+    j_peak = max(h["J"] for h in hist)
     print(
         f"\nWrote {outdir.resolve()}\n"
-        f"  J0={hist[0]['J']:.6f}  J_best={j_best:.6f}  "
-        f"best_iter={next(h['iter'] for h in hist if h.get('is_best'))}  "
-        f"vol={hist[-1]['vol']:.4f}"
+        f"  J0={hist[0]['J']:.6f}  J_best={best_rec['J']:.6f}  "
+        f"best_iter={best_rec['iter']}  β={best_rec['beta']:g}  "
+        f"J_peak={j_peak:.6f}  vol={hist[-1]['vol']:.4f}"
     )
     print_fields(aux)
     return _gamma, aux, hist

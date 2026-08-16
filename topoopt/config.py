@@ -22,7 +22,41 @@ HEAT_MODE_LABELS = {
 
 
 class ColdPlateParams(NamedTuple):
-    """Nondimensional 2-D box. All geometry and BCs are caller-supplied."""
+    """Nondimensional 2-D box. All geometry and BCs are caller-supplied.
+
+    Library defaults below are what ``params2d()`` uses when a field is
+    omitted. Named research cases in ``examples/problems.py`` override a
+    subset (volume, filter radius, ports, patches, solver caps). See
+    ``docs/model.md`` §8 and ``examples/README.md``.
+
+    Geometry
+        n, L — cells and box size. ``dx = L/n``.
+    Physics mode
+        heat_mode — ``conduction`` (Pe=0, k(γ)), ``convection`` (flow,
+        uniform k_fluid), ``both`` (flow and k(γ)).
+        flow_model — ``stokes`` or ``darcy``; ignored when heat_mode is
+        conduction.
+    Design / interpolation
+        vol_frac — target mean(γ̄). rmin — Helmholtz radius in cells.
+        eta — tanh-projection threshold. q_k, q_alpha, q_kappa — RAMP /
+        Borrvall–Petersson sharpness. k_fluid, k_solid, alpha_*, kappa_*.
+    Forcing / BCs
+        q_vol — uniform volumetric heat (off when hot_specs is set).
+        pe — Péclet (zero in conduction). p_in — Darcy left-port pressure.
+        stokes_dp — Stokes left-port pressure. t_in, t_hot — Dirichlet
+        temperatures. port_frac — centered height of both vertical ports.
+        hot_specs, cold_specs — ``face:…`` / ``box:…`` strings.
+        symmetry — ``x`` and/or ``y`` mirror after every design step.
+    Solvers
+        div_eps — Stokes continuity regularizer εp. solver_tol — Krylov
+        tolerance. flow_iters — Darcy CG / Stokes momentum CG. uzawa_iters
+        — Stokes pressure-correction warm start. stokes_kryl_iters —
+        pressure-Schur CG (0 skips the correction). heat_iters,
+        filter_iters — energy BiCGSTAB and Helmholtz CG.
+    Unused by the PDE
+        u_in_max — peak of ``grid.inlet_profile`` (parabolic). Current
+        Darcy/Stokes solves are pressure-driven and do not prescribe it.
+    """
 
     n: tuple[int, int]
     L: tuple[float, float]

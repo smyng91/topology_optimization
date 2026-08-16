@@ -99,6 +99,29 @@ def beta_schedule(n_iters: int, beta_max: float) -> jnp.ndarray:
     return jnp.array(sched[:n_iters])
 
 
+def highest_beta_best(history):
+    """Best-``J`` record at the largest β that has a finite objective.
+
+    ``J`` is not comparable across continuation: ``physical_density``
+    (and the PDE) change when the tanh projection sharpens. A mid-β
+    gray field can have a larger ``J`` than a nearly 0–1 design at
+    ``β_max``; that gray field is not the physical answer.
+    """
+    if not history:
+        raise ValueError("history is empty")
+    by_beta = {}
+    for rec in history:
+        if not math.isfinite(float(rec["J"])):
+            continue
+        beta = float(rec["beta"])
+        prev = by_beta.get(beta)
+        if prev is None or float(rec["J"]) > float(prev["J"]):
+            by_beta[beta] = rec
+    if not by_beta:
+        return history[-1]
+    return by_beta[max(by_beta)]
+
+
 def upsample_field(field, new_n: tuple[int, int]):
     """Bilinear resize of a cell-centered field onto ``new_n``."""
     field = jnp.asarray(field)
@@ -164,6 +187,19 @@ def optimize(
     every accepted design is projected onto that mirror. Without that
     projection a left–right or top–bottom problem grows a skewed design
     from asymmetric noise even though the PDEs and BCs are symmetric.
+
+    The returned design is the best-``J`` iterate at the **highest β
+    that ran**, not the global max ``J`` across continuation. A soft
+    mid-β field is a different discrete problem (and a poor 0–1
+    geometry) even when its ``J`` is larger. Stall is counted only
+    inside the current β level, so entering ``β_max`` does not
+    immediately stop because an earlier gray iterate was better.
+
+    Optimizer-only arguments (not on ``ColdPlateParams``): ``n_iters``
+    (default 80), ``lr`` (0.2 at β=1), ``beta_max`` (32), ``seed`` (0),
+    ``outdir``, ``callback``, ``start_gamma`` (skips noise and the
+    channel seed), ``abort_on_runaway`` (True), ``stall_iters`` (8; 0
+    disables). Init noise amplitude is 0.08.
     """
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -196,9 +232,16 @@ def optimize(
     best_iter = 0
     best_gamma = gamma
     best_aux = None
+    peak_J = -float("inf")
+    peak_iter = 0
+    prev_beta = None
     stopped = "completed"
     for it in range(1, n_iters + 1):
         beta = float(betas[it - 1])
+        if prev_beta is not None and abs(beta - prev_beta) > 1e-12:
+            # New continuation stage: do not compare J to a softer β.
+            best_J = -float("inf")
+        prev_beta = beta
         t0 = time.time()
         gamma = project_design(gamma, beta, params)
         (loss, (heat, aux)), grad = value_and_grad(gamma, beta)
@@ -218,8 +261,12 @@ def optimize(
         }
         for key in _DIAG_KEYS:
             rec[key] = float(aux[key])
-        if float(heat) > best_J:
-            best_J = float(heat)
+        heat_f = float(heat)
+        if math.isfinite(heat_f) and heat_f > peak_J:
+            peak_J = heat_f
+            peak_iter = it
+        if math.isfinite(heat_f) and heat_f > best_J:
+            best_J = heat_f
             best_iter = it
             best_gamma = gamma
             best_aux = aux
@@ -252,6 +299,8 @@ def optimize(
                 history=history,
                 best_J=best_J,
                 best_iter=best_iter,
+                peak_J=peak_J,
+                peak_iter=peak_iter,
                 gamma=gamma,
                 aux=aux,
                 best_gamma=best_gamma,
@@ -262,7 +311,8 @@ def optimize(
             )
             raise RunawaySolveError(
                 f"blocked or runaway solve at iter {it}: {reason}. "
-                f"Best-J design (iter {best_iter}) was written to {outdir}. "
+                f"Returned design (iter {best_iter}, highest β with a finite J) "
+                f"was written to {outdir}. "
                 "Flow modes have no extra cold patch; do not add one — fix the design."
             )
         if (
@@ -285,6 +335,8 @@ def optimize(
         history=history,
         best_J=best_J,
         best_iter=best_iter,
+        peak_J=peak_J,
+        peak_iter=peak_iter,
         gamma=gamma,
         aux=aux,
         best_gamma=best_gamma,
@@ -337,6 +389,8 @@ def _finalize_run(
     history,
     best_J,
     best_iter,
+    peak_J,
+    peak_iter,
     gamma,
     aux,
     best_gamma,
@@ -345,8 +399,12 @@ def _finalize_run(
     start_gamma,
     stall_iters,
 ):
+    chosen = highest_beta_best(history)
+    best_iter = int(chosen["iter"])
+    best_J = float(chosen["J"])
     for rec in history:
         rec["is_best"] = rec["iter"] == best_iter
+    outdir.mkdir(parents=True, exist_ok=True)
     (outdir / "history.json").write_text(json.dumps(history, indent=2))
     if aux is not None:
         _save_checkpoint(outdir, "final", gamma, aux, params)
@@ -362,6 +420,8 @@ def _finalize_run(
         history=history,
         best_J=best_J,
         best_iter=best_iter,
+        peak_J=peak_J,
+        peak_iter=peak_iter,
         stopped=stopped,
         start_gamma=start_gamma,
         stall_iters=stall_iters,
@@ -384,6 +444,8 @@ def _write_run_json(outdir: Path, params: ColdPlateParams, **meta):
         "J_final": last["J"],
         "J_best": meta["best_J"],
         "best_iter": meta["best_iter"],
+        "J_peak": meta.get("peak_J", meta["best_J"]),
+        "peak_iter": meta.get("peak_iter", meta["best_iter"]),
         "vol_final": last["vol"],
         "energy_rms": last["energy_rms"],
         "div_rms": last["div_rms"],
@@ -401,6 +463,7 @@ def _write_run_json(outdir: Path, params: ColdPlateParams, **meta):
 
 
 def _save_checkpoint(outdir: Path, tag, gamma, aux, params: ColdPlateParams):
+    outdir.mkdir(parents=True, exist_ok=True)
     payload = {
         "gamma_raw": np.asarray(gamma),
         "phys": np.asarray(aux["phys"]),

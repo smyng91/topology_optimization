@@ -25,7 +25,9 @@ These BCs are **example configurations**, not library defaults. They are
 defined in `examples/problems.py` and loaded with
 `--config examples.problems:<name>`. The solver accepts any
 `hot_specs` / `cold_specs` / `port_frac`. Setting `--hot` turns the
-volume source off.
+volume source off. Factory numbers and every `ColdPlateParams` field
+are in §8; tutorial meshes and `--quick` settings are in
+`examples/README.md`.
 
 **Notation.** \(\gamma\) is the raw design. \(\tilde\gamma\) is the Helmholtz-filtered
 field. \(\bar\gamma\) is the projected physical density used in the PDEs.
@@ -389,14 +391,24 @@ each step.
    has both a large energy residual and \(T_{\max}>50\), the run
    **aborts** after writing the best-\(J\) checkpoint
    (`RunawaySolveError`). Flow modes have no extra cold patch.
-3. Keep the design with the largest \(J\). At \(\beta_{\max}\), stop
-   early if \(J\) has not improved for `stall_iters` iterations
-   (default 8) so high-\(\beta\) chatter does not run out the budget.
-   Write `history.json`, `run.json` (serializable params, \(J_0\),
-   \(J_{\mathrm{final}}\), \(J_{\mathrm{best}}\), `stopped`, last
+3. Keep the design with the largest \(J\) **inside the current \(\beta\)
+   level**. \(J\) is not comparable across continuation:
+   \(\bar\gamma(\beta)\) and the discrete energy operator change when
+   the tanh projection sharpens, so a gray field at \(\beta=4\) can
+   beat a nearly 0–1 tree at \(\beta_{\max}\) on raw \(J\) and still
+   be a poor physical design. The returned field is the best-\(J\)
+   iterate at the **highest \(\beta\) that ran**. `run.json` also
+   stores \(J_{\mathrm{peak}}\) / `peak_iter` (global max \(J\), any
+   \(\beta\)) for diagnostics. At \(\beta_{\max}\), stop early if
+   \(J\) has not improved **at that \(\beta\)** for `stall_iters`
+   iterations (default 8). The stall clock resets when \(\beta\)
+   increases, so an early gray best does not abort the sharp stage
+   on the first \(\beta_{\max}\) iterate. Write `history.json`,
+   `run.json` (serializable params, \(J_0\), \(J_{\mathrm{final}}\),
+   \(J_{\mathrm{best}}\), \(J_{\mathrm{peak}}\), `stopped`, last
    diagnostics), `state_best.npz`, `state_final.npz`, PNG slices, and
    a VTK file of cell-centered \(\bar\gamma\), \(T\), \(|\mathbf{u}|\),
-   and \(p\). The optimize return value is the **best-\(J\)** design.
+   and \(p\). The optimize return value is that high-\(\beta\) design.
 
 `optimize_hierarchy` resizes the best field with bilinear interpolation
 and continues on a finer mesh (`--mesh-schedule nx,ny,iters:…`).
@@ -404,45 +416,123 @@ and continues on a finer mesh (`--mesh-schedule nx,ny,iters:…`).
 There is no MMA / IPOPT / optimality-criteria loop. The volume equality
 is a hard projection, not a penalty.
 
-## 8. Default parameters
+## 8. Parameters
 
-| Quantity | Symbol / flag | Default |
-|---|---|---|
-| Domain | \(L\), \(n\) | \((1,1)\), \((40,40)\) |
-| Heat mode | `--heat` | `both` |
-| Flow model | `--flow` | `stokes` |
-| Volume fraction | `--vol` \(v^\*\) | \(0.45\) |
-| Péclet number | `--pe` | \(40\) |
-| Volume source | `--q` | \(1\) |
-| \(k_s/k_f\) | `--k-ratio` | \(100\) |
-| Filter radius (cells) | `--rmin` | \(2.2\) |
-| Projection threshold | \(\eta\) | \(0.5\) |
-| Max projection | `--beta-max` | \(32\) |
-| Iterations | `--iters` | \(80\) |
-| Move limit at \(\beta=1\) | `--lr` \(\ell_0\) | \(0.2\) (\(\ell=\ell_0/\sqrt{\beta}\)) |
-| Port / sink fraction | `--port-frac` | \(0.5\) |
-| Inlet / Darcy pressure | \(p_{\mathrm{in}}\) | \(1\) |
-| Stokes pressure drop | `stokes_dp` | \(20\) |
-| Uzawa warm-start passes | `uzawa_iters` | \(80\) |
-| Stokes Schur CG | `stokes_kryl_iters` | \(200\) |
-| Inlet / hot temperatures | \(T_{\mathrm{in}}\), \(T_{\mathrm{hot}}\) | \(0\), \(1\) |
-| Brinkman \(\alpha_{\max}\) | | \(10^{5}\) |
-| Darcy \(\kappa_{\min}\) | | \(10^{-6}\) |
-| Continuity regularizer | \(\varepsilon\) | \(10^{-4}\) |
-| Solver tolerance | | \(10^{-7}\) |
-| Random seed | `--seed` | \(0\) |
-| Design symmetry | `--symmetry` | from the named factory (`x`, `y`, or none) |
+Every physics field lives on `ColdPlateParams` (`topoopt/config.py`).
+`params2d(nx, ny, **kwargs)` fills `n` and `L`; omitted kwargs use the
+library defaults below. Named factories in `examples/problems.py`
+override a subset — they do **not** change fields that are blank in
+§8.2. Tutorial meshes, iteration counts, and `--quick` settings are
+tabulated in `examples/README.md`.
+
+### 8.1 `ColdPlateParams` (library defaults)
+
+| Field | Symbol / flag | Default | Role |
+|---|---|---|---|
+| `n` | `--nx`, `--ny` | \((40,40)\) | Cells \((n_x,n_y)\) |
+| `L` | | \((1,1)\) | Box size. \(\Delta x=L_x/n_x\) |
+| `heat_mode` | `--heat` | `both` | `conduction` / `convection` / `both` |
+| `flow_model` | `--flow` | `stokes` | `stokes` or `darcy`; ignored in conduction |
+| `vol_frac` | `--vol` \(v^\*\) | \(0.45\) | Target \(\mathrm{mean}(\bar\gamma)\) |
+| `pe` | `--pe` | \(40\) | Péclet; forced to \(0\) in conduction |
+| `q_vol` | `--q` | \(1\) | Uniform volumetric source; off if `hot_specs` is set |
+| `k_fluid` | | \(1\) | Fluid conductivity |
+| `k_solid` | `--k-ratio` | \(100\) | Solid conductivity (`--k-ratio` writes this field; \(k_f\) stays \(1\)) |
+| `q_k` | | \(1\) | RAMP sharpness for \(k\) |
+| `q_alpha` | | \(0.1\) | Borrvall–Petersson sharpness for \(\alpha\) |
+| `q_kappa` | | \(0.1\) | RAMP sharpness for \(\kappa\) |
+| `alpha_min` | | \(0\) | Brinkman drag in fluid |
+| `alpha_max` | | \(10^{5}\) | Brinkman drag in solid |
+| `kappa_min` | | \(10^{-6}\) | Darcy permeability in solid |
+| `kappa_max` | | \(1\) | Darcy permeability in fluid |
+| `p_in` | | \(1\) | Darcy left-port pressure |
+| `stokes_dp` | | \(20\) | Stokes left-port pressure \(\Delta p\) |
+| `t_in` | | \(0\) | Inlet / cold Dirichlet temperature |
+| `t_hot` | | \(1\) | Hot-patch Dirichlet temperature |
+| `rmin` | `--rmin` | \(2.2\) | Helmholtz radius in **cells**; \(r=r_{\min}\min(\Delta x,\Delta y)\) |
+| `eta` | | \(0.5\) | Tanh-projection threshold |
+| `port_frac` | `--port-frac` | \(0.5\) | Centered height of both vertical ports |
+| `hot_specs` | `--hot` | `()` | Dirichlet heat-source patches; turns \(q\) off |
+| `cold_specs` | `--cold` | `()` | Dirichlet sinks |
+| `symmetry` | `--symmetry` | `()` | Design mirrors: `x` and/or `y` |
+| `div_eps` | \(\varepsilon\) | \(10^{-4}\) | Stokes continuity regularizer \(\varepsilon p\) |
+| `solver_tol` | | \(10^{-7}\) | Krylov residual tolerance |
+| `flow_iters` | | \(80\) | Darcy CG / Stokes momentum CG |
+| `uzawa_iters` | | \(80\) | Stokes pressure-correction warm start |
+| `stokes_kryl_iters` | | \(200\) | Pressure-Schur CG (`0` skips it) |
+| `heat_iters` | | \(400\) | Energy BiCGSTAB |
+| `filter_iters` | | \(200\) | Helmholtz CG |
+| `u_in_max` | | \(1\) | Peak of `grid.inlet_profile` only. **Not** used by the pressure-driven Darcy/Stokes residuals |
+
+Region spec strings: `face:{left,right,bottom,top}`,
+`face:bottom:frac=0.5`, `face:top:frac=0.4:center=0.3`,
+`box:xmin,xmax,ymin,ymax`.
+
+JSON / YAML (`--config file.json`) may set any field above plus `nx`,
+`ny`, `lx`, `ly`, `factory`, and `comment` (ignored). Lists become
+tuples. See `examples/configs/`.
+
+### 8.2 Named factory overrides
+
+| Factory | heat | flow | \(v^\*\) | \(r_{\min}\) | Pe | BCs | symmetry | Solver caps |
+|---|---|---|---|---|---|---|---|---|
+| `conduction_tree` | conduction | none | \(0.30\) | \(1.5\) | \(0\) | cold `face:bottom:frac=0.08` | `x` | heat 400, filter 200 |
+| `convection_darcy` | convection | Darcy | \(0.45\) | \(2.0\) | \(40\) | `port_frac=0.5`, no patches | `y` | flow 280, heat 400, filter 200 |
+| `conjugate_darcy` | both | Darcy | \(0.45\) | \(2.0\) | \(40\) | same ports | `y` | same as convection |
+| `conjugate_stokes` | both | Stokes | \(0.45\) | \(2.0\) | \(40\) | same ports | `y` | flow 80, Uzawa 80, Schur 200, heat 320, filter 120 |
+| `custom_faces` | conduction | none | \(0.40\) | \(2.0\) | \(0\) | hot top / cold bottom, each `frac=0.5`; \(q=0\) | `x` | heat 400, filter 200 |
+| `custom_boxes` | conduction | none | \(0.40\) | \(2.0\) | \(0\) | hot `box:0.2,0.8,0.0,0.18`; cold `box:0.0,0.18,0.25,0.75` and `face:left`; \(q=0\) | none | heat 400, filter 200 |
+
+### 8.3 Optimizer kwargs (`optimize` / `optimize_hierarchy`)
+
+These are **not** on `ColdPlateParams`.
+
+| Argument | Flag | Default | Role |
+|---|---|---|---|
+| `n_iters` | `--iters` | \(80\) | Design steps (ignored if `--mesh-schedule` is set) |
+| `lr` | `--lr` \(\ell_0\) | \(0.2\) | Move at \(\beta=1\); \(\ell=\ell_0/\sqrt{\max(\beta,1)}\) |
+| `beta_max` | `--beta-max` | \(32\) | Projection continuation ceiling |
+| `seed` | `--seed` | \(0\) | Init-noise PRNG. Ignored when `start_gamma` is passed |
+| `outdir` | `--outdir` | `outputs` | `history.json`, `run.json`, `state_*.npz` |
+| `start_gamma` | | `None` | Warm start; skips random noise and the channel seed |
+| `abort_on_runaway` | | `True` | Raise `RunawaySolveError` if \(T\) blows up |
+| `stall_iters` | | \(8\) | Stop after this many non-improving steps at \(\beta_{\max}\) (`0` disables) |
+| `callback` | | `None` | `callback(it, gamma, aux, rec)` |
+| mesh schedule | `--mesh-schedule` | unset | `nx,ny,iters:nx,ny,iters` for `optimize_hierarchy` |
+
+Init noise amplitude is \(0.08\) (hard-coded). Flow problems add a
+mid-height duct of height `port_frac` (fluid \(0.08\), solid \(0.78\))
+before the noise. Gallery runs use \(\ell_0=0.12\).
+
+### 8.4 `analyze` aux
+
+| Key | Meaning |
+|---|---|
+| `phys` | \(\bar\gamma\) after filter + projection |
+| `T`, `p`, `speed`, `face_vel` | Fields |
+| `V` | \(\mathrm{mean}(\bar\gamma)\) |
+| `energy_rms` | RMS of the discrete energy residual |
+| `div_rms` | \(\|\nabla\cdot\mathbf{u}\|_{\mathrm{rms}}\) |
+| `u_in`, `u_out`, `mass_err` | Port throughput; \(\lvert u_{\mathrm{in}}-u_{\mathrm{out}}\rvert/(\lvert u_{\mathrm{in}}\rvert+\varepsilon)\) |
+| `stokes_rel` | Relative Stokes residual (0 if not Stokes) |
+| `gray` | Fraction of cells with \(0.05<\bar\gamma<0.95\) |
+| `T_mean`, `T_max`, `speed_max` | Field scalars |
+
+Each optimize iterate also stores `J`, `vol`, `beta`, `move`, `sym_err`,
+`is_best` (the returned high-\(\beta\) iterate). `run.json` adds
+`stopped` (`completed` / `stall` / `runaway`), \(J_{\mathrm{best}}\) /
+`best_iter` (same iterate), and \(J_{\mathrm{peak}}\) / `peak_iter`
+(largest \(J\) at any \(\beta\)).
 
 Example gallery (`python examples/gallery.py`, also
 `python -m topoopt examples`) uses \(80\times 80\)
 (Stokes \(48\times 48\)), \(150\)–\(200\) iterations (Stokes \(100\)),
-\(\beta_{\max}=32\), \(r_{\min}=2.0\) (conduction \(1.5\)). Outputs go
-under `outputs/` (gitignored). The conduction case uses a small bottom
-sink and \(v^\*=0.30\) so a branching tree can form. Committed
-snapshots from shorter runs are in `docs/figures/`. JSON problem files
-are in `examples/configs/`. `python -m topoopt verify` is a short
-physics check, not a crisp-design run. Short-run reference numbers
-used by CI are in `examples/reference.json`.
+\(\ell_0=0.12\), \(\beta_{\max}=32\). Outputs go under `outputs/`
+(gitignored). Committed snapshots from shorter runs are in
+`docs/figures/`. `python -m topoopt verify` is a short physics check,
+not a crisp-design run. Short-run reference numbers used by CI are in
+`examples/reference.json`. Per-script meshes and `--quick` values:
+`examples/README.md`.
 
 ## 9. Limitations
 
@@ -462,8 +552,9 @@ used by CI are in `examples/reference.json`.
 - **Conduction at high \(\beta\).** With a volume source and a small
   sink, \(J=-\mathrm{mean}(T)\) can still oscillate once the projection
   becomes sharp (\(\beta\gtrsim 16\)). The \(\beta\)-damped move limit
-  and keep-best reduce the chatter that reaches the returned design;
-  volume stays at \(v^\*\).
+  and per-level keep-best reduce the chatter that reaches the returned
+  **sharp** design; volume stays at \(v^\*\). Do not publish a mid-β
+  gray field just because its residual or \(J\) looked better.
 - **Blocked flow, no conduction sink.** Flow modes have only the
   centerline ports. A sealed design can run \(T\) away; the energy
   residual warns and the optimizer aborts if \(T\) blows up. Do not

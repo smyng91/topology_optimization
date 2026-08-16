@@ -34,10 +34,10 @@ Stokes–Poiseuille. Snapshots live in [`docs/figures/`](docs/figures/).
 
 ## Install
 
-Python 3.10+ (3.12 recommended). From the repo root:
+Python 3.14+. From the repo root:
 
 ```bash
-python3.12 -m venv .venv
+python3.14 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[cpu,dev]"
 ```
@@ -69,7 +69,9 @@ python -m topoopt 2d --config examples.problems:conduction_tree --mesh-schedule 
 ```
 
 JSON may name a `factory` or list `nx` / `ny` / `hot_specs` / `cold_specs`
-/ `symmetry` directly. YAML works if PyYAML is installed.
+/ `symmetry` directly. YAML works if PyYAML is installed. Factory
+overrides (volume, `rmin`, ports, solver caps) are tabulated in
+[examples/README.md](examples/README.md) and [docs/model.md](docs/model.md) §8.2.
 
 ## Tutorials
 
@@ -109,12 +111,33 @@ python -m topoopt verify
 python -m topoopt examples
 ```
 
-Useful flags: `--heat`, `--flow {stokes,darcy}`, `--hot`, `--cold`, `--port-frac`,
-`--q`, `--vol`, `--pe`, `--k-ratio`, `--rmin`, `--lr`, `--beta-max`, `--iters`,
-`--symmetry {x,y,x,y}`, `--mesh-schedule nx,ny,iters:…`, `--seed`, `--outdir`.
+Every `ColdPlateParams` field and optimizer kwarg is listed in
+[docs/model.md](docs/model.md) §8. Tutorial / gallery numbers are in
+[examples/README.md](examples/README.md).
 
-Defaults: `--iters 80`, `--rmin 2.2`, `--beta-max 32`, `--vol 0.45`.
-`--lr` is the move at `β = 1` and decays as `1/sqrt(β)`.
+| Flag | Writes | Library default if omitted |
+|---|---|---|
+| `--config` | factory or JSON/YAML | generic `params2d` box (no patches) |
+| `--nx`, `--ny` | `n` | 40, 40 |
+| `--heat` | `heat_mode` | `both` (or the factory) |
+| `--flow {stokes,darcy}` | `flow_model` | `stokes` |
+| `--vol` | `vol_frac` | 0.45 |
+| `--pe` | `pe` | 40 |
+| `--q` | `q_vol` | 1 |
+| `--k-ratio` | `k_solid` (`k_fluid` stays 1) | 100 |
+| `--rmin` | `rmin` (cells) | 2.2 |
+| `--port-frac` | `port_frac` | 0.5 |
+| `--hot`, `--cold` | `hot_specs` / `cold_specs` | empty |
+| `--symmetry {x,y,x,y}` | `symmetry` | from the factory, else none |
+| `--iters` | design steps | 80 |
+| `--lr` | move at `β=1` | 0.2 (`ℓ = lr/√β`) |
+| `--beta-max` | projection ceiling | 32 |
+| `--mesh-schedule` | `optimize_hierarchy` | unset |
+| `--seed` | init noise | 0 |
+| `--outdir` | artifacts | `outputs/2d` |
+
+Fields with no CLI flag (`q_k`, `alpha_max`, `stokes_dp`, `heat_iters`,
+…) are set on the factory, in JSON, or by `params2d(..., key=value)`.
 
 ## Stokes notes
 
@@ -146,7 +169,7 @@ MPLBACKEND=Agg python -m pytest tests -q
 ```
 
 This is the same command GitHub Actions runs (`pip install -e ".[cpu,dev]"`
-on Python 3.12; the gallery is not run in CI). The suite covers
+on Python 3.14; the gallery is not run in CI). The suite covers
 interpolation, Darcy/Stokes residuals, Stokes adjoint FD on throughput
 and on the full `analyze` path, manufactured solutions and observed
 order (`tests/test_mms.py`), short conduction / Darcy / custom-faces

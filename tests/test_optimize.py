@@ -12,6 +12,7 @@ from examples.problems import conduction_tree, convection_darcy
 from topoopt.optimize import (
     RunawaySolveError,
     beta_schedule,
+    highest_beta_best,
     move_limit,
     optimize,
     optimize_hierarchy,
@@ -63,8 +64,12 @@ def test_short_conduction_optimize(tmp_path):
     assert (tmp_path / "state_best.npz").is_file()
     assert (tmp_path / "state_final.npz").is_file()
     run = json.loads((tmp_path / "run.json").read_text())
+    best = next(h for h in hist if h["is_best"])
     assert run["n_iters"] == 10
-    assert run["J_best"] == pytest.approx(max(h["J"] for h in hist))
+    assert run["J_best"] == pytest.approx(best["J"])
+    assert run["best_iter"] == best["iter"]
+    assert best["beta"] == pytest.approx(max(h["beta"] for h in hist))
+    assert run["J_peak"] == pytest.approx(max(h["J"] for h in hist))
     assert run["best_iter"] >= 1
     assert "params" in run
     assert isinstance(run["params"]["n"], list)
@@ -73,6 +78,39 @@ def test_short_conduction_optimize(tmp_path):
     assert float(max_error(_g, params)) < 1e-12
     assert run["stopped"] == "completed"
     assert run["params"]["symmetry"] == ["x"]
+
+
+def test_highest_beta_best_rejects_softer_projection():
+    hist = [
+        {"iter": 1, "beta": 1.0, "J": -0.020},
+        {"iter": 42, "beta": 4.0, "J": -0.012},
+        {"iter": 80, "beta": 8.0, "J": -0.014},
+        {"iter": 81, "beta": 16.0, "J": -0.015},
+        {"iter": 85, "beta": 16.0, "J": -0.0135},
+    ]
+    rec = highest_beta_best(hist)
+    assert rec["iter"] == 85
+    assert rec["beta"] == pytest.approx(16.0)
+    assert rec["J"] == pytest.approx(-0.0135)
+
+
+def test_keep_best_and_stall_are_per_beta_level(tmp_path):
+    params = conduction_tree(nx=12, ny=12, filter_iters=20, heat_iters=80)
+    _g, aux, hist = optimize(
+        params,
+        n_iters=15,
+        lr=0.2,
+        beta_max=4.0,
+        seed=0,
+        outdir=tmp_path,
+        stall_iters=8,
+    )
+    best = next(h for h in hist if h["is_best"])
+    run = json.loads((tmp_path / "run.json").read_text())
+    assert best["beta"] == pytest.approx(max(h["beta"] for h in hist))
+    assert run["stopped"] == "completed"
+    assert run["J_peak"] == pytest.approx(max(h["J"] for h in hist))
+    assert float(aux["energy_rms"]) == pytest.approx(best["energy_rms"])
 
 
 def test_short_darcy_optimize(tmp_path):
