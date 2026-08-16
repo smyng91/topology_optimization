@@ -10,7 +10,7 @@ Spec strings (repeatable via ``--hot`` / ``--cold`` / ``--q-region``):
 ``hot_specs`` / ``cold_specs`` prescribe Dirichlet *T*. ``q_specs``
 marks cells that receive the volumetric source ``q_vol`` (*T* still
 floats). The package does not pick default patches. Research cases set
-these fields in ``examples/problems.py``.
+these fields in ``topoopt.problems``.
 """
 
 from __future__ import annotations

@@ -21,6 +21,11 @@ def build_parser():
             "(e.g. examples.problems:conduction_tree or examples/configs/conduction_tree.json)"
         ),
     )
+    p.add_argument(
+        "--trusted-python-config",
+        action="store_true",
+        help="Allow an unregistered Python factory; use only with trusted local code",
+    )
     p.add_argument("--nx", type=int, default=None)
     p.add_argument("--ny", type=int, default=None)
     p.add_argument("--iters", type=int, default=80)
@@ -118,7 +123,11 @@ def parse_mesh_schedule(spec: str):
 def build_params(args):
     overrides = _cli_overrides(args)
     if args.config:
-        return load_params(args.config, **overrides)
+        return load_params(
+            args.config,
+            allow_unsafe_python=args.trusted_python_config,
+            **overrides,
+        )
     return params2d(
         nx=overrides.pop("nx", 40),
         ny=overrides.pop("ny", 40),
@@ -147,8 +156,13 @@ def main(argv=None):
         params = params._replace(n=(int(last_n[0]), int(last_n[1])))
     else:
         _gamma, aux, hist = optimize(params, n_iters=args.iters, callback=callback, **opt_kw)
-    plot_2d(aux, params, outdir / "design_final.png", title=f"2D final design ({params.heat_label})")
-    write_vtk(aux, params, outdir / "design_final.vtk")
+    plot_2d(
+        aux,
+        params,
+        outdir / "design_best.png",
+        title=f"2D published best design ({params.heat_label})",
+    )
+    write_vtk(aux, params, outdir / "design_best.vtk")
     best_rec = next(h for h in hist if h.get("is_best"))
     print(
         f"Wrote results to {outdir.resolve()}  "

@@ -1,5 +1,8 @@
 # Reference snapshots
 
+These PNGs are tutorial snapshots, not publication sources. Local
+manuscript figures, when present, come from `scripts/build_manuscript.py`.
+
 Committed PNGs from `python examples/publish_figures.py` (short meshes,
 not the $`80\times 80`$ gallery). All optimizing snapshots use
 $`\ell_0=0.2`$, $`\beta_{\max}=8`$, `seed=0`. Raw $`\gamma`$ is an exact

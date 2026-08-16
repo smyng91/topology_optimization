@@ -20,6 +20,7 @@ from topoopt.symmetry import max_error as symmetry_error
 
 _DIAG_KEYS = (
     "energy_rms",
+    "energy_rel",
     "div_rms",
     "mass_err",
     "stokes_rel",
@@ -31,22 +32,46 @@ _DIAG_KEYS = (
     "u_out",
 )
 
+# 40 bisections of [-2, 2] give a shift tolerance of 4/2^40 ≈ 4e-12.
+VOLUME_BISECTION_ITERS = 40
+
+# Keep-best ignores iterates whose energy residual is not a solved PDE.
+ENERGY_REL_MAX = 1.0e-3
+ENERGY_RMS_MAX = 1.0e-2
+VOLUME_ABS_MAX = 1.0e-8
+MASS_REL_MAX = 5.0e-2
+DIVERGENCE_RMS_MAX = 5.0e-3
+STOKES_REL_MAX = 1.0e-5
+
 
 class RunawaySolveError(RuntimeError):
     """Energy / temperature blew up, usually a sealed flow design."""
 
 
+class NoTrustworthyResultError(RuntimeError):
+    """No iterate met the predeclared publication evidence gates."""
+
+
 def project_physical_volume(gamma_raw, beta, params: ColdPlateParams, target):
-    """Shift the raw field so the filtered/projected solid fraction matches ``target``."""
+    """Shift the raw field so the filtered/projected solid fraction matches ``target``.
+
+    Stokes port cells are pinned to fluid *inside* the residual, otherwise a
+    post-hoc ``keep_ports_open`` step would drift ``mean(γ̄)`` off ``v*``.
+    """
+
+    def mean_phys(shift):
+        g = keep_ports_open(jnp.clip(gamma_raw - shift, 0.0, 1.0), params)
+        return physical_density(g, beta, params).mean()
 
     def body(_, bounds):
         a, b = bounds
         mid = 0.5 * (a + b)
-        mean = physical_density(jnp.clip(gamma_raw - mid, 0.0, 1.0), beta, params).mean()
-        return jax.lax.cond(mean > target, lambda: (mid, b), lambda: (a, mid))
+        return jax.lax.cond(mean_phys(mid) > target, lambda: (mid, b), lambda: (a, mid))
 
-    a, b = jax.lax.fori_loop(0, 24, body, (jnp.array(-2.0), jnp.array(2.0)))
-    return jnp.clip(gamma_raw - 0.5 * (a + b), 0.0, 1.0)
+    a, b = jax.lax.fori_loop(
+        0, VOLUME_BISECTION_ITERS, body, (jnp.array(-2.0), jnp.array(2.0))
+    )
+    return keep_ports_open(jnp.clip(gamma_raw - 0.5 * (a + b), 0.0, 1.0), params)
 
 
 def keep_ports_open(gamma, params: ColdPlateParams):
@@ -63,10 +88,9 @@ def keep_ports_open(gamma, params: ColdPlateParams):
 
 
 def project_design(gamma, beta, params: ColdPlateParams):
-    """Symmetry → volume equality → Stokes port pin → symmetry."""
+    """Symmetry → volume equality (with Stokes port pin) → symmetry."""
     gamma = apply_symmetry(jnp.clip(gamma, 0.0, 1.0), params)
     gamma = project_physical_volume(gamma, beta, params, params.vol_frac)
-    gamma = keep_ports_open(gamma, params)
     return apply_symmetry(gamma, params)
 
 
@@ -83,43 +107,150 @@ def move_limit(lr: float, beta: float) -> float:
 
 
 def beta_schedule(n_iters: int, beta_max: float) -> jnp.ndarray:
-    """Piecewise-constant β continuation, doubling until ``beta_max``."""
+    """Piecewise-constant β continuation, doubling until ``beta_max``.
+
+    At least 40% of the steps are spent at ``β_max`` so the tanh projection
+    has time to sharpen after the gray continuation stages.
+    """
     levels = []
     beta = 1.0
     while beta < beta_max - 1e-9:
         levels.append(beta)
         beta *= 2.0
     levels.append(float(beta_max))
-    chunk = max(n_iters // len(levels), 1)
+    n_last = max(1, int(math.ceil(0.4 * n_iters)))
+    n_rest = max(n_iters - n_last, 0)
+    n_early = max(len(levels) - 1, 1)
+    chunk = max(n_rest // n_early, 1) if n_rest else 0
     sched = []
-    for b in levels:
+    for b in levels[:-1]:
         sched.extend([b] * chunk)
+    sched.extend([levels[-1]] * max(n_iters - len(sched), n_last))
     if len(sched) < n_iters:
         sched.extend([levels[-1]] * (n_iters - len(sched)))
     return jnp.array(sched[:n_iters])
 
 
-def highest_beta_best(history):
-    """Best-``J`` record at the largest β that has a finite objective.
+def energy_trustworthy(rec, rel_max: float = ENERGY_REL_MAX, rms_max: float = ENERGY_RMS_MAX) -> bool:
+    """Whether ``T`` is a solved energy field, not a Krylov leftover."""
+    if "energy_rel" in rec:
+        return float(rec["energy_rel"]) <= rel_max
+    return float(rec.get("energy_rms", 0.0)) <= rms_max
+
+
+def result_rejection_reasons(
+    rec,
+    params: ColdPlateParams | None = None,
+    *,
+    target_vol: float | None = None,
+    energy_max: float | None = None,
+) -> list[str]:
+    """Return every failed numerical-evidence gate for one iterate."""
+    reasons = []
+    required_finite = ("J",)
+    if params is not None:
+        required_finite += (
+            "vol",
+            "energy_rms",
+            "energy_rel",
+            "div_rms",
+            "mass_err",
+            "stokes_rel",
+            "T_mean",
+            "T_max",
+            "speed_max",
+        )
+    for key in required_finite:
+        if key not in rec or not math.isfinite(float(rec[key])):
+            reasons.append(f"{key} is missing or non-finite")
+    if reasons:
+        return reasons
+    if energy_max is not None:
+        if float(rec.get("energy_rms", float("inf"))) > energy_max:
+            reasons.append(f"energy_rms>{energy_max:g}")
+    elif not energy_trustworthy(rec):
+        reasons.append("energy residual above gate")
+    if params is None:
+        return reasons
+    target = params.vol_frac if target_vol is None else target_vol
+    if abs(float(rec["vol"]) - float(target)) > VOLUME_ABS_MAX:
+        reasons.append(f"volume error>{VOLUME_ABS_MAX:g}")
+    if abs(float(rec.get("sym_err", 0.0))) > VOLUME_ABS_MAX:
+        reasons.append(f"symmetry error>{VOLUME_ABS_MAX:g}")
+    if params.solves_flow:
+        if float(rec["mass_err"]) > MASS_REL_MAX:
+            reasons.append(f"mass imbalance>{MASS_REL_MAX:g}")
+        if float(rec["div_rms"]) > DIVERGENCE_RMS_MAX:
+            reasons.append(f"divergence RMS>{DIVERGENCE_RMS_MAX:g}")
+        if params.flow_model == "stokes" and float(rec["stokes_rel"]) > STOKES_REL_MAX:
+            reasons.append(f"Stokes residual>{STOKES_REL_MAX:g}")
+    return reasons
+
+
+def result_trustworthy(
+    rec,
+    params: ColdPlateParams | None = None,
+    *,
+    target_vol: float | None = None,
+    energy_max: float | None = None,
+) -> bool:
+    """Whether one iterate is eligible to be returned or published."""
+    return not result_rejection_reasons(
+        rec, params, target_vol=target_vol, energy_max=energy_max
+    )
+
+
+def highest_beta_best(
+    history,
+    energy_max: float | None = None,
+    *,
+    params: ColdPlateParams | None = None,
+    target_vol: float | None = None,
+):
+    """Best-``J`` record at the largest β that passes every evidence gate.
 
     ``J`` is not comparable across continuation: ``physical_density``
-    (and the PDE) change when the tanh projection sharpens. A mid-β
-    gray field can have a larger ``J`` than a nearly 0–1 design at
-    ``β_max``; that gray field is not the physical answer.
+    (and the PDE) change when the tanh projection sharpens. Iterates that
+    fail the energy, flow, mass, finite-field, symmetry, or volume gates
+    cannot win. If every record fails, this function raises rather than
+    returning a scientifically untrustworthy fallback. ``energy_max`` is
+    an optional RMS override for focused tests.
     """
     if not history:
         raise ValueError("history is empty")
+
     by_beta = {}
     for rec in history:
-        if not math.isfinite(float(rec["J"])):
+        if not result_trustworthy(
+            rec,
+            params,
+            target_vol=target_vol,
+            energy_max=energy_max,
+        ):
             continue
         beta = float(rec["beta"])
         prev = by_beta.get(beta)
         if prev is None or float(rec["J"]) > float(prev["J"]):
             by_beta[beta] = rec
     if not by_beta:
-        return history[-1]
+        failures = result_rejection_reasons(
+            history[-1],
+            params,
+            target_vol=target_vol,
+            energy_max=energy_max,
+        )
+        raise NoTrustworthyResultError(
+            "no iterate passed the evidence gates; last iterate: "
+            + ", ".join(failures)
+        )
     return by_beta[max(by_beta)]
+
+
+def _select_returned(history, snapshots, params: ColdPlateParams):
+    """Map ``highest_beta_best`` onto the stored (γ, aux) snapshot."""
+    chosen = highest_beta_best(history, params=params)
+    gamma, aux = snapshots[int(chosen["iter"])]
+    return chosen, gamma, aux
 
 
 def upsample_field(field, new_n: tuple[int, int]):
@@ -189,11 +320,14 @@ def optimize(
     from asymmetric noise even though the PDEs and BCs are symmetric.
 
     The returned design is the best-``J`` iterate at the **highest β
-    that ran**, not the global max ``J`` across continuation. A soft
-    mid-β field is a different discrete problem (and a poor 0–1
-    geometry) even when its ``J`` is larger. Stall is counted only
-    inside the current β level, so entering ``β_max`` does not
-    immediately stop because an earlier gray iterate was better.
+    that passes every evidence gate**, not the global max ``J`` across
+    continuation. Gates cover finite fields, energy and flow residuals,
+    mass balance, volume feasibility, and imposed symmetry. There is no
+    fallback to an unconverged iterate. A soft mid-β field is a different
+    discrete problem (and a poor 0–1 geometry) even when its ``J`` is
+    larger. Stall is counted only inside the current β level, so entering
+    ``β_max`` does not immediately stop because an earlier gray iterate
+    was better.
 
     Optimizer-only arguments (not on ``ColdPlateParams``): ``n_iters``
     (default 80), ``lr`` (0.2 at β=1), ``beta_max`` (32), ``seed`` (0),
@@ -224,7 +358,7 @@ def optimize(
         f"  hot={params.hot_specs}  cold={params.cold_specs}  q_region={params.q_specs}"
     )
     print(
-        f"{'it':>4}  {'beta':>6}  {'J':>12}  {'vol':>8}  {'E_rms':>9}  "
+        f"{'it':>4}  {'beta':>6}  {'J':>12}  {'vol':>8}  {'E_rel':>9}  "
         f"{'div_rms':>9}  {'mass_err':>9}  {'gray':>6}  {'time':>7}"
     )
 
@@ -237,11 +371,15 @@ def optimize(
     peak_iter = 0
     prev_beta = None
     stopped = "completed"
+    snapshots = {}
     for it in range(1, n_iters + 1):
         beta = float(betas[it - 1])
         if prev_beta is not None and abs(beta - prev_beta) > 1e-12:
-            # New continuation stage: do not compare J to a softer β.
+            # New continuation stage: do not compare J to a softer β,
+            # and restart the stall clock so β_max is not aborted because
+            # a mid-β iterate was the last improvement.
             best_J = -float("inf")
+            best_iter = it
         prev_beta = beta
         t0 = time.time()
         gamma = project_design(gamma, beta, params)
@@ -263,26 +401,37 @@ def optimize(
         for key in _DIAG_KEYS:
             rec[key] = float(aux[key])
         heat_f = float(heat)
-        if math.isfinite(heat_f) and heat_f > peak_J:
+        rejection_reasons = result_rejection_reasons(rec, params)
+        evidence_ok = not rejection_reasons
+        rec["evidence_ok"] = evidence_ok
+        rec["rejection_reasons"] = rejection_reasons
+        if evidence_ok and heat_f > peak_J:
             peak_J = heat_f
             peak_iter = it
-        if math.isfinite(heat_f) and heat_f > best_J:
+        if evidence_ok and heat_f > best_J:
             best_J = heat_f
             best_iter = it
             best_gamma = gamma
             best_aux = aux
             _save_checkpoint(outdir, "best", best_gamma, best_aux, params)
         rec["is_best"] = it == best_iter
+        snapshots[it] = (gamma, aux)
         history.append(rec)
         print(
             f"{it:4d}  {beta:6.1f}  {float(heat):12.6f}  {vol:8.4f}  "
-            f"{rec['energy_rms']:9.2e}  {rec['div_rms']:9.2e}  {rec['mass_err']:9.3f}  "
+            f"{rec['energy_rel']:9.2e}  {rec['div_rms']:9.2e}  {rec['mass_err']:9.3f}  "
             f"{rec['gray']:6.3f}  {dt:7.2f}s"
         )
-        if rec["energy_rms"] > 1e-2:
-            print(f"  warning: energy residual RMS {rec['energy_rms']:.3e} > 1e-2")
-        if params.solves_flow and rec["mass_err"] > 0.15:
-            print(f"  warning: port mass error {rec['mass_err']:.3f} > 0.15")
+        if rec["energy_rel"] > ENERGY_REL_MAX:
+            print(
+                f"  warning: relative energy residual {rec['energy_rel']:.3e} "
+                f"> {ENERGY_REL_MAX:.0e}"
+            )
+        if params.solves_flow and rec["mass_err"] > MASS_REL_MAX:
+            print(
+                f"  warning: port mass error {rec['mass_err']:.3f} "
+                f"> {MASS_REL_MAX:.2f}"
+            )
         if callback is not None:
             callback(it, gamma, aux, rec)
         if it == 1 or it == n_iters or it % 10 == 0:
@@ -290,7 +439,7 @@ def optimize(
         reason = runaway_reason(rec, params) if abort_on_runaway else None
         if reason:
             stopped = "runaway"
-            _finalize_run(
+            selected = _finalize_run(
                 outdir,
                 params,
                 n_iters=n_iters,
@@ -306,14 +455,19 @@ def optimize(
                 aux=aux,
                 best_gamma=best_gamma,
                 best_aux=best_aux,
+                snapshots=snapshots,
                 stopped=stopped,
                 start_gamma=start_gamma is not None,
                 stall_iters=stall_iters,
             )
+            selected_text = (
+                f"Trustworthy design iter {selected[0]['iter']} was preserved."
+                if selected[0] is not None
+                else "No iterate passed all evidence gates."
+            )
             raise RunawaySolveError(
                 f"blocked or runaway solve at iter {it}: {reason}. "
-                f"Returned design (iter {best_iter}, highest β with a finite J) "
-                f"was written to {outdir}. "
+                f"{selected_text} Diagnostics were written to {outdir}. "
                 "Flow modes have no extra cold patch; do not add one — fix the design."
             )
         if (
@@ -326,7 +480,7 @@ def optimize(
             break
         gamma = gamma_next
 
-    _finalize_run(
+    chosen, best_gamma, best_aux = _finalize_run(
         outdir,
         params,
         n_iters=n_iters,
@@ -342,10 +496,16 @@ def optimize(
         aux=aux,
         best_gamma=best_gamma,
         best_aux=best_aux,
+        snapshots=snapshots,
         stopped=stopped,
         start_gamma=start_gamma is not None,
         stall_iters=stall_iters,
     )
+    if chosen is None:
+        raise NoTrustworthyResultError(
+            f"optimization finished but no iterate passed all evidence gates; "
+            f"diagnostics were written to {outdir}"
+        )
     return best_gamma, best_aux, history
 
 
@@ -396,15 +556,23 @@ def _finalize_run(
     aux,
     best_gamma,
     best_aux,
+    snapshots,
     stopped,
     start_gamma,
     stall_iters,
 ):
-    chosen = highest_beta_best(history)
-    best_iter = int(chosen["iter"])
-    best_J = float(chosen["J"])
+    try:
+        chosen, best_gamma, best_aux = _select_returned(history, snapshots, params)
+        best_iter = int(chosen["iter"])
+        best_J = float(chosen["J"])
+    except NoTrustworthyResultError:
+        chosen = None
+        best_gamma = None
+        best_aux = None
+        best_iter = None
+        best_J = None
     for rec in history:
-        rec["is_best"] = rec["iter"] == best_iter
+        rec["is_best"] = best_iter is not None and rec["iter"] == best_iter
     outdir.mkdir(parents=True, exist_ok=True)
     (outdir / "history.json").write_text(json.dumps(history, indent=2))
     if aux is not None:
@@ -427,12 +595,49 @@ def _finalize_run(
         start_gamma=start_gamma,
         stall_iters=stall_iters,
     )
+    return chosen, best_gamma, best_aux
 
 
 def _write_run_json(outdir: Path, params: ColdPlateParams, **meta):
     history = meta["history"]
     last = history[-1]
+    best_iter = meta.get("best_iter")
+    best = (
+        next((record for record in history if record["iter"] == best_iter), None)
+        if best_iter is not None
+        else None
+    )
+
+    record_keys = (
+        "iter",
+        "beta",
+        "J",
+        "vol",
+        "energy_rms",
+        "energy_rel",
+        "div_rms",
+        "mass_err",
+        "stokes_rel",
+        "gray",
+        "T_mean",
+        "T_max",
+        "speed_max",
+        "u_in",
+        "u_out",
+        "sym_err",
+        "evidence_ok",
+        "rejection_reasons",
+    )
+
+    def summary(record):
+        return None if record is None else {key: record.get(key) for key in record_keys}
+
+    peak_j = meta.get("peak_J")
+    if peak_j is not None and not math.isfinite(float(peak_j)):
+        peak_j = None
+    peak_iter = meta.get("peak_iter") if peak_j is not None else None
     payload = {
+        "schema_version": 2,
         "params": _params_json(params),
         "n_iters": meta["n_iters"],
         "lr": meta["lr"],
@@ -441,25 +646,43 @@ def _write_run_json(outdir: Path, params: ColdPlateParams, **meta):
         "stopped": meta.get("stopped", "completed"),
         "start_gamma": meta.get("start_gamma", False),
         "stall_iters": meta.get("stall_iters", 8),
+        "published_state": "state_best.npz" if best is not None else None,
+        "best": summary(best),
+        "final": summary(last),
+        "evidence_gates": {
+            "energy_rel_max": ENERGY_REL_MAX,
+            "energy_rms_max": ENERGY_RMS_MAX,
+            "volume_abs_max": VOLUME_ABS_MAX,
+            "mass_rel_max": MASS_REL_MAX,
+            "divergence_rms_max": DIVERGENCE_RMS_MAX,
+            "stokes_rel_max": STOKES_REL_MAX,
+        },
         "J0": history[0]["J"],
         "J_final": last["J"],
-        "J_best": meta["best_J"],
-        "best_iter": meta["best_iter"],
-        "J_peak": meta.get("peak_J", meta["best_J"]),
-        "peak_iter": meta.get("peak_iter", meta["best_iter"]),
+        "J_best": None if best is None else best["J"],
+        "best_iter": best_iter,
+        "J_peak": peak_j,
+        "peak_iter": peak_iter,
         "vol_final": last["vol"],
-        "energy_rms": last["energy_rms"],
-        "div_rms": last["div_rms"],
-        "mass_err": last["mass_err"],
-        "stokes_rel": last["stokes_rel"],
-        "gray": last["gray"],
-        "T_mean": last["T_mean"],
-        "T_max": last["T_max"],
-        "speed_max": last["speed_max"],
-        "u_in": last["u_in"],
-        "u_out": last["u_out"],
-        "sym_err": last.get("sym_err", 0.0),
+        "vol_best": None if best is None else best["vol"],
     }
+    diagnostic_keys = (
+        "energy_rms",
+        "energy_rel",
+        "div_rms",
+        "mass_err",
+        "stokes_rel",
+        "gray",
+        "T_mean",
+        "T_max",
+        "speed_max",
+        "u_in",
+        "u_out",
+        "sym_err",
+    )
+    for key in diagnostic_keys:
+        payload[key] = None if best is None else best.get(key)
+        payload[f"{key}_final"] = last.get(key)
     (outdir / "run.json").write_text(json.dumps(payload, indent=2))
 
 

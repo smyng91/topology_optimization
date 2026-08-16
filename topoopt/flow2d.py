@@ -23,7 +23,14 @@ import jax.numpy as jnp
 from topoopt.config import ColdPlateParams
 from topoopt.grid import port_mask
 from topoopt.interpolation import brinkman_alpha
-from topoopt.solvers import implicit_nonsym_solve, iterative_spd_solve
+from jax.flatten_util import ravel_pytree
+
+from topoopt.solvers import iterative_gmres_solve, iterative_spd_solve
+
+# Same cutoff as the convective energy factor: publication Stokes meshes
+# use a dense residual-Jacobian adjoint rather than a poorly conditioned
+# monolithic Krylov solve of the saddle-point transpose.
+STOKES_DENSE_ADJOINT_MAX_CELLS = 48 * 48
 
 
 def _alpha_u(alpha):
@@ -85,6 +92,17 @@ def _div(u, v, dx, dy):
     return (u[1:, :] - u[:-1, :]) / dx + (v[:, 1:] - v[:, :-1]) / dy
 
 
+def _constrain_u(u, port):
+    """Eliminate off-port normal-velocity Dirichlet columns."""
+    u = u.at[0, :].set(jnp.where(port, u[0, :], 0.0))
+    return u.at[-1, :].set(jnp.where(port, u[-1, :], 0.0))
+
+
+def _constrain_v(v):
+    """Eliminate top/bottom normal-velocity Dirichlet columns."""
+    return v.at[:, 0].set(0.0).at[:, -1].set(0.0)
+
+
 def _diag_u(alpha_u, dx, dy, port):
     diag = alpha_u + 2.0 / (dx * dx) + 2.0 / (dy * dy)
     diag = diag.at[:, 0].add(1.0 / (dy * dy))
@@ -112,14 +130,30 @@ def stokes_residual(sol, gamma, params: ColdPlateParams):
     au, av = _alpha_u(alpha), _alpha_v(alpha)
     port = port_mask(params)
 
-    ru = au * u - _lap_u(u, dx, dy) + _gradp_u(p, dx, _p_drive(params))
+    u_free = _constrain_u(u, port)
+    v_free = _constrain_v(v)
+    ru = au * u_free - _lap_u(u_free, dx, dy) + _gradp_u(
+        p, dx, _p_drive(params)
+    )
     ru = ru.at[0, :].set(jnp.where(port, ru[0, :], u[0, :]))
     ru = ru.at[-1, :].set(jnp.where(port, ru[-1, :], u[-1, :]))
-    rv = av * v - _lap_v(v, dx, dy) + _gradp_v(p, dy)
+    rv = av * v_free - _lap_v(v_free, dx, dy) + _gradp_v(p, dy)
     rv = rv.at[:, 0].set(v[:, 0])
     rv = rv.at[:, -1].set(v[:, -1])
-    rp = _div(u, v, dx, dy) + params.div_eps * p
+    rp = _div(u_free, v_free, dx, dy) + params.div_eps * p
     return ru, rv, rp
+
+
+def stokes_relative_residual(sol, gamma, params: ColdPlateParams):
+    """Linear-system residual norm scaled by the inhomogeneous pressure drive."""
+    residual = stokes_residual(sol, gamma, params)
+    zero = tuple(jnp.zeros_like(field) for field in sol)
+    inhomogeneous = stokes_residual(zero, gamma, params)
+    numerator = jnp.sqrt(sum(jnp.vdot(value, value) for value in residual))
+    denominator = jnp.sqrt(
+        sum(jnp.vdot(value, value) for value in inhomogeneous)
+    )
+    return numerator / jnp.maximum(denominator, 1e-30)
 
 
 def _residual_diag(gamma, params: ColdPlateParams):
@@ -150,17 +184,95 @@ def _solve_velocity(gamma, p, params: ColdPlateParams, p_drive: float | None = N
     rhs_v = (-_gradp_v(p, dy)).at[:, 0].set(0.0).at[:, -1].set(0.0)
 
     def au_mv(u):
-        r = au * u - _lap_u(u, dx, dy)
+        u_free = _constrain_u(u, port)
+        r = au * u_free - _lap_u(u_free, dx, dy)
         r = r.at[0, :].set(jnp.where(port, r[0, :], u[0, :]))
         return r.at[-1, :].set(jnp.where(port, r[-1, :], u[-1, :]))
 
     def av_mv(v):
-        r = av * v - _lap_v(v, dx, dy)
+        v_free = _constrain_v(v)
+        r = av * v_free - _lap_v(v_free, dx, dy)
         return r.at[:, 0].set(v[:, 0]).at[:, -1].set(v[:, -1])
 
-    u = iterative_spd_solve(au_mv, rhs_u, _diag_u(au, dx, dy, port), niter=params.flow_iters, tol=params.solver_tol)
-    v = iterative_spd_solve(av_mv, rhs_v, _diag_v(av, dx, dy), niter=params.flow_iters, tol=params.solver_tol)
+    u = iterative_spd_solve(
+        au_mv,
+        rhs_u,
+        _diag_u(au, dx, dy, port),
+        niter=params.flow_iters,
+        tol=params.solver_tol,
+    )
+    v = iterative_spd_solve(
+        av_mv,
+        rhs_v,
+        _diag_v(av, dx, dy),
+        niter=params.flow_iters,
+        tol=params.solver_tol,
+    )
     return u, v
+
+
+def _momentum_operators(gamma, params: ColdPlateParams):
+    """Return symmetric eliminated momentum blocks and their diagonals."""
+    dx, dy = params.dx
+    alpha = brinkman_alpha(gamma, params)
+    au, av = _alpha_u(alpha), _alpha_v(alpha)
+    port = port_mask(params)
+
+    def au_mv(u):
+        u_free = _constrain_u(u, port)
+        residual = au * u_free - _lap_u(u_free, dx, dy)
+        residual = residual.at[0, :].set(
+            jnp.where(port, residual[0, :], u[0, :])
+        )
+        return residual.at[-1, :].set(
+            jnp.where(port, residual[-1, :], u[-1, :])
+        )
+
+    def av_mv(v):
+        v_free = _constrain_v(v)
+        residual = av * v_free - _lap_v(v_free, dx, dy)
+        return residual.at[:, 0].set(v[:, 0]).at[:, -1].set(v[:, -1])
+
+    return (
+        (au_mv, av_mv),
+        (_diag_u(au, dx, dy, port), _diag_v(av, dx, dy)),
+    )
+
+
+def _solve_momentum_rhs(gamma, rhs, params: ColdPlateParams, *, niter: int):
+    operators, diagonals = _momentum_operators(gamma, params)
+    return tuple(
+        iterative_spd_solve(
+            operator,
+            value,
+            diagonal,
+            niter=niter,
+            tol=params.solver_tol,
+        )
+        for operator, value, diagonal in zip(operators, rhs, diagonals)
+    )
+
+
+def _pressure_gradient(p, params: ColdPlateParams):
+    """Unknown-pressure contribution to momentum rows (the G block)."""
+    dx, dy = params.dx
+    port = port_mask(params)
+    gu = _gradp_u(p, dx, 0.0)
+    gu = gu.at[0, :].set(jnp.where(port, gu[0, :], 0.0))
+    gu = gu.at[-1, :].set(jnp.where(port, gu[-1, :], 0.0))
+    gv = _gradp_v(p, dy).at[:, 0].set(0.0).at[:, -1].set(0.0)
+    return gu, gv
+
+
+def _velocity_divergence(velocity, params: ColdPlateParams):
+    """Continuity block D after eliminating constrained velocity columns."""
+    u, v = velocity
+    return _div(
+        _constrain_u(u, port_mask(params)),
+        _constrain_v(v),
+        params.dx[0],
+        params.dx[1],
+    )
 
 
 def _uzawa_forward(gamma, params: ColdPlateParams):
@@ -178,12 +290,13 @@ def _uzawa_forward(gamma, params: ColdPlateParams):
 
 
 def _schur_correct(p0, gamma, params: ColdPlateParams):
-    """CG on the pressure Schur complement S = D A^{-1} G + ε I.
+    """CG on the pressure Jacobian ``S = -D A^{-1} G + ε I``.
 
-    Stokes–Brinkman is affine in (u, v, p) at fixed γ. One Schur solve
-    plus a final momentum solve is an exact Newton step for R=0, and CG
-    is stable on high-contrast Brinkman fields (saddle-point BiCGSTAB
-    is not).
+    Stokes–Brinkman is affine in (u, v, p) at fixed γ, so exact block
+    solves would give the linear-system solution in one correction.
+    Here the momentum and Schur systems are capped iterative solves, so
+    the achieved residual—not "exact Newton" terminology—determines
+    whether a result is acceptable.
     """
     dx, dy = params.dx
     _du, _dv, dp = _residual_diag(gamma, params)
@@ -212,6 +325,76 @@ def _stokes_forward(gamma, params: ColdPlateParams):
     return _schur_correct(p0, gamma, params)
 
 
+def _stokes_adjoint_dense(gamma, sol, cotangent, params: ColdPlateParams):
+    """Factor the transposed residual Jacobian on publication-sized meshes."""
+
+    def apply_transpose(lam):
+        return jax.vjp(lambda state: stokes_residual(state, gamma, params), sol)[1](lam)[0]
+
+    rhs, unravel = ravel_pytree(cotangent)
+    identity = jnp.eye(rhs.size, dtype=rhs.dtype)
+    jacobian_t = jax.vmap(
+        lambda column: ravel_pytree(apply_transpose(unravel(column)))[0]
+    )(identity).T
+    return unravel(jnp.linalg.solve(jacobian_t, rhs))
+
+
+def _stokes_adjoint(gamma, sol, cotangent, params: ColdPlateParams):
+    """Solve the transposed Stokes residual Jacobian for the discrete adjoint."""
+    n_cells = int(params.n[0] * params.n[1])
+    if n_cells <= STOKES_DENSE_ADJOINT_MAX_CELLS:
+        return _stokes_adjoint_dense(gamma, sol, cotangent, params)
+
+    momentum_iters = max(params.flow_iters, 400)
+    pressure_iters = max(params.stokes_kryl_iters, 500)
+    zero_velocity = (jnp.zeros_like(sol[0]), jnp.zeros_like(sol[1]))
+    zero_pressure = jnp.zeros_like(sol[2])
+
+    def divergence_transpose(value):
+        return jax.vjp(
+            lambda velocity: _velocity_divergence(velocity, params),
+            zero_velocity,
+        )[1](value)[0]
+
+    def gradient_transpose(value):
+        return jax.vjp(
+            lambda pressure: _pressure_gradient(pressure, params),
+            zero_pressure,
+        )[1](value)[0]
+
+    velocity_rhs = (cotangent[0], cotangent[1])
+    pressure_rhs = cotangent[2]
+    a_inv_rhs = _solve_momentum_rhs(
+        gamma, velocity_rhs, params, niter=momentum_iters
+    )
+    reduced_rhs = pressure_rhs - gradient_transpose(a_inv_rhs)
+
+    def transpose_schur(value):
+        dt_value = divergence_transpose(value)
+        a_inv_dt = _solve_momentum_rhs(
+            gamma, dt_value, params, niter=momentum_iters
+        )
+        return -gradient_transpose(a_inv_dt) + params.div_eps * value
+
+    pressure_diag = _residual_diag(gamma, params)[2]
+    lambda_p = iterative_gmres_solve(
+        transpose_schur,
+        reduced_rhs,
+        pressure_diag,
+        niter=pressure_iters,
+        tol=params.solver_tol,
+    )
+    dt_lambda = divergence_transpose(lambda_p)
+    corrected_rhs = tuple(
+        value - correction
+        for value, correction in zip(velocity_rhs, dt_lambda)
+    )
+    lambda_u, lambda_v = _solve_momentum_rhs(
+        gamma, corrected_rhs, params, niter=momentum_iters
+    )
+    return lambda_u, lambda_v, lambda_p
+
+
 def solve_stokes(gamma, params: ColdPlateParams):
     """Uzawa warm start + Schur CG; reverse mode is the residual adjoint."""
 
@@ -226,16 +409,7 @@ def solve_stokes(gamma, params: ColdPlateParams):
     def _bwd(res, gsol):
         g, sol = res
 
-        def jtv(lam):
-            return jax.vjp(lambda s: stokes_residual(s, g, params), sol)[1](lam)[0]
-
-        lam = implicit_nonsym_solve(
-            jtv,
-            gsol,
-            _residual_diag(g, params),
-            niter=max(params.stokes_kryl_iters, params.flow_iters, 400),
-            tol=params.solver_tol,
-        )
+        lam = _stokes_adjoint(g, sol, gsol, params)
         g_gamma = -jax.vjp(lambda gg: stokes_residual(sol, gg, params), g)[1](lam)[0]
         return (g_gamma,)
 

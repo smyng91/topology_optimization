@@ -7,7 +7,7 @@ import numpy as np
 
 from topoopt.config import params2d
 from topoopt.darcy import solve_darcy
-from topoopt.flow2d import solve_stokes, stokes_residual
+from topoopt.flow2d import solve_stokes, stokes_relative_residual
 from topoopt.grid import zero_face_velocity
 from topoopt.heat import solve_energy
 from topoopt.filter import helmholtz_filter, helmholtz_operator
@@ -97,7 +97,7 @@ def test_stokes_poiseuille_mms_and_order():
             flow_model="stokes",
             port_frac=1.0,
             stokes_dp=20.0,
-            div_eps=1e-12,
+            div_eps=1e-4,
             flow_iters=120,
             uzawa_iters=40,
             stokes_kryl_iters=200,
@@ -108,9 +108,8 @@ def test_stokes_poiseuille_mms_and_order():
         sol = solve_stokes(gamma, params)
         u, v, p = sol
         u_ex, v_ex, p_ex = stokes_poiseuille_exact(params)
-        res = stokes_residual(sol, gamma, params)
-        rel = float(jnp.sqrt(sum(jnp.vdot(r, r) for r in res))) / (1.0 + float(jnp.linalg.norm(u)))
-        assert rel < 2e-3, (n, rel)
+        rel = float(stokes_relative_residual(sol, gamma, params))
+        assert rel < 1e-5, (n, rel)
         err_u = float(relative_l2(u, u_ex))
         errors.append(err_u)
         assert err_u < 0.08, (n, err_u)

@@ -8,10 +8,16 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 
-from examples.problems import conduction_tree, conjugate_darcy, conjugate_stokes, convection_darcy, custom_faces
 from topoopt.config import HEAT_MODES, params2d
 from topoopt.optimize import optimize
 from topoopt.problem import analyze
+from topoopt.problems import (
+    conduction_tree,
+    conjugate_darcy,
+    conjugate_stokes,
+    convection_darcy,
+    custom_faces,
+)
 from topoopt.viz import plot_2d, write_vtk
 
 
@@ -111,11 +117,12 @@ def _run_case(name, params, iters, outdir, plot):
             plot(aux, params, out / f"design_{it:03d}.png", title=f"{name} it {it}  J={rec['J']:.4f}")
 
     _g, aux, hist = optimize(params, n_iters=iters, lr=0.25, beta_max=4.0, seed=0, outdir=out, callback=callback)
-    plot(aux, params, out / "design_final.png", title=f"{name} final")
-    write_vtk(aux, params, out / "design_final.vtk")
+    plot(aux, params, out / "design_best.png", title=f"{name} published best")
+    write_vtk(aux, params, out / "design_best.vtk")
     tmin, tmax = _check_temperature(aux)
     j0, j1 = hist[0]["J"], hist[-1]["J"]
-    j_best = max(h["J"] for h in hist)
+    best = next(h for h in hist if h.get("is_best"))
+    j_best = best["J"]
     rec = {
         "name": name,
         "heat": params.heat_mode,
@@ -123,7 +130,7 @@ def _run_case(name, params, iters, outdir, plot):
         "J1": j1,
         "J_best": j_best,
         "improved": j_best >= j0 - 1e-6,
-        "vol": hist[-1]["vol"],
+        "vol": best["vol"],
         "T_min": tmin,
         "T_max": tmax,
         "T_mean": float(np.asarray(aux["T"]).mean()),

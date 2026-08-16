@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -23,6 +24,11 @@ SCRIPTS = (
 )
 
 
+def _env(**extra):
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", **extra}
+    return env
+
+
 @pytest.mark.parametrize("name", SCRIPTS)
 def test_tutorial_help(name):
     proc = subprocess.run(
@@ -31,6 +37,8 @@ def test_tutorial_help(name):
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        env=_env(),
     )
     assert proc.returncode == 0, proc.stderr
     assert "usage:" in proc.stdout.lower() or "quick" in proc.stdout.lower()
@@ -44,7 +52,8 @@ def test_analyze_once_quick(tmp_path):
         check=False,
         capture_output=True,
         text=True,
-        env={**__import__("os").environ, "MPLBACKEND": "Agg"},
+        encoding="utf-8",
+        env=_env(MPLBACKEND="Agg"),
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "solid cooler than fluid" in proc.stdout
@@ -59,7 +68,8 @@ def test_mms_check_quick(tmp_path):
         check=False,
         capture_output=True,
         text=True,
-        env={**__import__("os").environ, "MPLBACKEND": "Agg"},
+        encoding="utf-8",
+        env=_env(MPLBACKEND="Agg"),
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert (out / "mms_report.txt").is_file()

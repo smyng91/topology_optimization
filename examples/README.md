@@ -1,13 +1,14 @@
 # Tutorials and configs
 
 Named cases (geometry, ports, Dirichlet $`T`$, volumetric $`q`$, solver caps)
-are in [`problems.py`](problems.py). The package does not infer BCs from
+are in [`topoopt/problems.py`](../topoopt/problems.py) and re-exported
+from [`problems.py`](problems.py). The package does not infer BCs from
 `--heat`. All named cases use the compact cone filter
 (`filter_kind=cone`); `--filter helmholtz` is optional.
 Library defaults: [docs/model.md](../docs/model.md) §8.
 
 ```bash
-python -m topoopt 2d --config examples.problems:conduction_tree
+python -m topoopt 2d --config conduction_tree
 python -m topoopt 2d --config examples/configs/localized_source.json
 python examples/run_all.py --quick
 ```
@@ -31,13 +32,13 @@ Constants: `CENTERLINE_PORT=0.5`,
 
 | Factory | heat | flow | $`v^{*}`$ | $`r_{\min}`$ | $`\mathrm{Pe}`$ | Regions | sym | $`J`$ | Caps |
 |---|---|---|---|---|---|---|---|---|---|
-| `conduction_tree` | conduction | none | $`0.30`$ | $`1.5`$ | $`0`$ | cold `frac=0.08` | `x` | $`-\mathrm{mean}(T)`$ | heat $`400`$, filter $`200`$ |
-| `convection_darcy` | convection | Darcy | $`0.45`$ | $`2.0`$ | $`40`$ | ports $`0.5`$ | `y` | $`-\mathrm{mean}(T)`$ | flow $`280`$, heat $`400`$, filter $`200`$ |
+| `conduction_tree` | conduction | none | $`0.30`$ | $`1.5`$ | $`0`$ | cold `frac=0.08` | `x` | $`-\mathrm{mean}(T)`$ | heat $`800`$, filter $`200`$ |
+| `convection_darcy` | convection | Darcy | $`0.45`$ | $`2.0`$ | $`40`$ | ports $`0.5`$ | `y` | $`-\mathrm{mean}(T)`$ | flow $`280`$, heat $`800`$, filter $`200`$ |
 | `conjugate_darcy` | both | Darcy | $`0.45`$ | $`2.0`$ | $`40`$ | same ports | `y` | $`-\mathrm{mean}(T)`$ | same |
-| `conjugate_stokes` | both | Stokes | $`0.45`$ | $`2.0`$ | $`40`$ | same; $`\Delta p=20`$ | `y` | $`-\mathrm{mean}(T)`$ | flow $`80`$, Uzawa $`80`$, Schur $`200`$, heat $`320`$, filter $`120`$ |
-| `custom_faces` | conduction | none | $`0.40`$ | $`2.0`$ | $`0`$ | hot/cold faces `frac=0.5`; $`q=0`$ | `x` | $`Q_{\mathrm{hot}}`$ | heat $`400`$, filter $`200`$ |
-| `custom_boxes` | conduction | none | $`0.40`$ | $`2.0`$ | $`0`$ | hot `box:0.2,0.8,0.0,0.18`; cold box + `face:left`; $`q=0`$ | none | $`Q_{\mathrm{hot}}`$ | heat $`400`$, filter $`200`$ |
-| `localized_source` | conduction | none | $`0.30`$ | $`1.5`$ | $`0`$ | `q_specs=SOURCE_BOX`; cold `frac=0.08` | `x` | $`-\mathrm{mean}(T)`$ | heat $`400`$, filter $`200`$ |
+| `conjugate_stokes` | both | Stokes | $`0.45`$ | $`2.0`$ | $`40`$ | same; $`\Delta p=20`$ | `y` | $`-\mathrm{mean}(T)`$ | flow $`80`$, Uzawa $`80`$, Schur $`200`$, heat $`800`$, filter $`120`$ |
+| `custom_faces` | conduction | none | $`0.40`$ | $`2.0`$ | $`0`$ | hot/cold faces `frac=0.5`; $`q=0`$ | `x` | $`Q_{\mathrm{hot}}`$ | heat $`800`$, filter $`200`$ |
+| `custom_boxes` | conduction | none | $`0.40`$ | $`2.0`$ | $`0`$ | hot `box:0.2,0.8,0.0,0.18`; cold box + `face:left`; $`q=0`$ | none | $`Q_{\mathrm{hot}}`$ | heat $`800`$, filter $`200`$ |
+| `localized_source` | conduction | none | $`0.30`$ | $`1.5`$ | $`0`$ | `q_specs=SOURCE_BOX`; cold `frac=0.08` | `x` | $`-\mathrm{mean}(T)`$ | heat $`800`$, filter $`200`$ |
 
 ## JSON / YAML
 
@@ -46,7 +47,7 @@ Constants: `CENTERLINE_PORT=0.5`,
 
 | Key | Meaning |
 |---|---|
-| `factory` | optional `module:func`; other keys override it |
+| `factory` | optional registered name (`conduction_tree`, …); other keys override it |
 | `nx`, `ny` / `n` | mesh |
 | `lx`, `ly` / `L` | box size |
 | `hot_specs`, `cold_specs`, `q_specs`, `symmetry` | string lists |
@@ -59,7 +60,7 @@ Examples: [`configs/conduction_tree.json`](configs/conduction_tree.json),
 
 ## Tutorials
 
-Install `pip install -e ".[cpu,dev]"` (Python 3.14), run from the repo
+Install `pip install -e ".[cpu,dev]"` (Python 3.10+), run from the repo
 root. Shared flags: `--quick`, `--outdir` (`outputs/0N_…`), `--seed`
 ($`0`$). `--quick` is a smoke mesh.
 
@@ -67,7 +68,7 @@ Each optimizing script writes PNG / VTK / `history.json` / `run.json` /
 `state_*.npz`. They pass `lr`, `beta_max`, `seed`, `n_iters` to
 `optimize` (`stall_iters=8`). Aux: $`V`$, $`T_{\mathrm{mean}}`$,
 $`T_{\mathrm{max}}`$, `speed_max`, $`u_{\mathrm{in}}`$, $`u_{\mathrm{out}}`$,
-`mass_err`, `energy_rms`, `div_rms`, `stokes_rel`, `gray`.
+`mass_err`, `energy_rms`, `energy_rel`, `div_rms`, `stokes_rel`, `gray`.
 
 ```bash
 python examples/01_analyze_once.py --quick
@@ -96,7 +97,7 @@ $`\beta_{\max}=32`$, `seed=0`), not a tutorial.
 | `2d_conduction` | $`80\times 80`$, $`200`$ it, $`r_{\min}=1.5`$ | $`16\times 16`$, $`8`$ it |
 | `2d_convection_darcy` | $`80\times 80`$, $`150`$ it, flow $`280`$ | $`16\times 16`$, $`8`$ it |
 | `2d_both_darcy` | $`80\times 80`$, $`150`$ it | $`16\times 16`$, $`8`$ it |
-| `2d_both_stokes` | $`48\times 48`$, $`100`$ it, Uzawa $`250`$ | $`12\times 12`$, $`4`$ it |
+| `2d_both_stokes` | $`48\times 48`$, $`100`$ it, Uzawa $`250`$, Schur $`400`$, heat $`1200`$ | $`12\times 12`$, $`4`$ it |
 | `2d_custom_faces` | $`80\times 80`$, $`180`$ it | $`16\times 16`$, $`8`$ it |
 | `2d_custom_boxes` | $`80\times 80`$, $`180`$ it | $`16\times 16`$, $`8`$ it |
 

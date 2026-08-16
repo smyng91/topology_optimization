@@ -8,7 +8,8 @@ Domain $`\Omega=[0,L_x]\times[0,L_y]`$ (default $`L=(1,1)`$), uniform mesh
 $`n=(n_x,n_y)`$ (default $`40\times 40`$), $`\Delta x=L_x/n_x`$,
 $`\Delta y=L_y/n_y`$, $`\Delta V=\Delta x\,\Delta y`$.
 
-Example BCs live in `examples/problems.py`, not in the library.
+Example BCs live in the registered factories in `topoopt/problems.py`
+(re-exported from `examples/problems.py`).
 `--heat` only selects PDE terms. Tutorial meshes: `examples/README.md`.
 Wiki: https://github.com/smyng91/topology_optimization/wiki
 
@@ -72,10 +73,10 @@ $`1,2,4,\ldots,\beta_{\max}`$ (default $`32`$):
 {\tanh(\beta\eta)+\tanh\bigl(\beta(1-\eta)\bigr)}.
 ```
 
-RAMP interpolation (endpoints exact; large $`q`$ $`\approx`$ linear):
+Conventional Stolpe–Svanberg RAMP interpolation (endpoints exact; $`q=0`$ is linear):
 
 ```math
-\mathrm{RAMP}(x;f_0,f_1,q)=f_0+(f_1-f_0)\,x\,\frac{q+1}{x+q}.
+\mathrm{RAMP}(x;f_0,f_1,q)=f_0+(f_1-f_0)\,\frac{x}{1+q(1-x)}.
 ```
 
 | Property | Map | Default |
@@ -179,7 +180,7 @@ R_p=\nabla\cdot\mathbf{u}+\varepsilon p.
 
 Forward: Uzawa / pressure-correction warm start ($`p\leftarrow p-\omega\nabla\cdot\mathbf{u}`$,
 $`\omega=0.6`$, `uzawa_iters` default $`80`$), then Jacobi CG on the
-pressure Schur complement $`S=DA^{-1}G+\varepsilon I`$
+pressure correction $`S=-DA^{-1}G+\varepsilon I`$
 (`stokes_kryl_iters` default $`200`$; $`0`$ skips it):
 
 ```math
@@ -187,15 +188,24 @@ S\,\mathrm{d}p=-(\nabla\cdot\mathbf{u}(p_0)+\varepsilon p_0),\qquad
 p\leftarrow p_0+\mathrm{d}p.
 ```
 
-This is an exact Newton step because Stokes–Brinkman is affine in
-$`(\mathbf{u},p)`$ at fixed $`\bar{\gamma}`$. Momentum blocks at frozen $`p`$
-are SPD (CG). Saddle-point BiCGSTAB is not used (unstable at high
+An exact block solve would recover the affine Stokes--Brinkman solution
+in one correction. The implementation uses capped iterative momentum
+and Schur solves, so acceptance is based on the achieved residual.
+Momentum blocks at frozen $`p`$ are SPD after Dirichlet elimination
+(CG). Saddle-point BiCGSTAB is not used (unstable at high
 $`\alpha`$ contrast).
 
-**Linear solvers.** Filter, Darcy, Stokes momentum, and the Stokes
-Schur: Jacobi CG. Energy and the Stokes adjoint: Jacobi BiCGSTAB.
-Library caps: filter $`200`$, flow $`80`$, Schur $`200`$, heat $`400`$.
-Tolerance $`10^{-7}`$.
+**Linear solvers.** Filter, Darcy, Stokes momentum, the Stokes Schur,
+and **energy when** $`\mathrm{Pe}=0`$: Jacobi CG. Energy when
+$`\mathrm{Pe}>0`$ and $`n_x n_y\le 48^2`$: dense factorization of the
+finite-volume operator (the 2-D Stokes factory mesh). Larger convective
+meshes: Jacobi BiCGSTAB with a 50-iteration shadow-residual restart and
+a breakdown restart when $`r_0\cdot v`$ or $`t\cdot t`$ vanishes. The
+Stokes residual adjoint uses a dense transposed Jacobian on the same
+$`48^2`$ cutoff. Library caps: filter $`200`$, flow $`80`$,
+Schur $`200`$, heat $`800`$.
+Tolerance $`10^{-7}`$. Publication runs also require the achieved
+residual to meet the evidence gates in `topoopt.optimize`.
 
 ## 5. Objective and volume
 
@@ -225,13 +235,17 @@ multiplier):
 
 Library default $`v^{*}=0.45`$ (`--vol`). Enforcement: mean-zero descent
 $`g\leftarrow g-\mathrm{mean}(g)`$, normalize by $`\|g\|_\infty`$, projected
-step $`\gamma\leftarrow\mathrm{clip}(\gamma-\ell g,0,1)`$, then a 24-step
+step $`\gamma\leftarrow\mathrm{clip}(\gamma-\ell g,0,1)`$, then a 40-step
 bisection for a shift $`c`$ with
-$`\mathrm{mean}(\bar{\gamma}(\mathrm{clip}(\gamma-c,0,1)))=v^{*}`$.
+$`\mathrm{mean}(\bar{\gamma}(\mathrm{clip}(\gamma-c,0,1)))=v^{*}`$
+(Stokes port cells are held at fluid *inside* that residual so the pin
+does not drift the volume).
 
-Stokes pins a one-cell fluid layer on port *design* cells after the
-volume projection (`keep_ports_open`) and seeds a mid-height duct.
-Neither is a PDE Dirichlet. Darcy does not pin ports.
+Stokes pins a one-cell fluid layer on port *design* cells
+**inside** the volume bisection (`keep_ports_open`) so the pin does not
+drift $\mathrm{mean}(\bar{\gamma})$ off $v^{*}$, then mirrors again.
+Neither the pin nor the mid-height channel seed is a PDE Dirichlet.
+Darcy does not pin ports.
 
 ## 6. Discrete adjoint
 
@@ -281,10 +295,15 @@ Factories: `conduction_tree` / `custom_faces` / `localized_source` $`\to`$
    non-finite, $`T_{\max}>10^3`$, or a flow solve has a large energy
    residual and $`T_{\max}>50`$. Flow modes get no extra cold patch.
 3. Keep-best is **per $`\beta`$ level**. $`J`$ is not comparable across
-   continuation ($`\bar{\gamma}(\beta)`$ changes). The return value is the
-   best-$`J`$ iterate at the highest $`\beta`$ that ran. `J_peak` /
-   `peak_iter` store the global max $`J`$. Stall (`stall_iters`, default
-   $`8`$) counts only at $`\beta_{\max}`$ and resets when $`\beta`$ increases.
+   continuation ($`\bar{\gamma}(\beta)`$ changes). Iterates with relative
+   energy residual $`>10^{-3}`$ (or RMS $`>10^{-2}`$ if relative is
+   absent) are ignored, so an unconverged $`T`$ cannot win.
+   The return value is the best-$`J`$ energy-trustworthy iterate at the
+   highest $`\beta`$ whose relative energy residual is at most $`10^{-3}`$.
+   `J_peak` / `peak_iter` store the global max $`J`$ among trustworthy
+   iterates. Stall (`stall_iters`, default $`8`$) counts only at
+   $`\beta_{\max}`$ and resets when $`\beta`$ increases.
+   At least 40% of the steps are spent at $`\beta_{\max}`$.
 
 `optimize_hierarchy` bilinear-upsamples and continues
 (`--mesh-schedule nx,ny,iters:…`).
@@ -330,7 +349,7 @@ library defaults. Factories override only the columns in §8.2.
 | `flow_iters` | | $`80`$ | Darcy / Stokes-momentum CG |
 | `uzawa_iters` | | $`80`$ | Stokes pressure warm start |
 | `stokes_kryl_iters` | | $`200`$ | Schur CG; $`0`$ skips |
-| `heat_iters` | | $`400`$ | energy BiCGSTAB |
+| `heat_iters` | | $`800`$ | energy CG ($`\mathrm{Pe}=0`$) or BiCGSTAB ($`n>48^2`$) |
 | `filter_iters` | | $`200`$ | Helmholtz CG (unused by cone) |
 | `u_in_max` | | $`1`$ | unused by the pressure-driven residuals |
 
@@ -341,13 +360,13 @@ JSON / YAML may set any field plus `nx`, `ny`, `lx`, `ly`, `factory`,
 
 | Factory | heat | flow | $`v^{*}`$ | $`r_{\min}`$ | $`\mathrm{Pe}`$ | BCs | sym | Caps |
 |---|---|---|---|---|---|---|---|---|
-| `conduction_tree` | conduction | none | $`0.30`$ | $`1.5`$ | $`0`$ | cold `face:bottom:frac=0.08` | `x` | heat $`400`$, filter $`200`$ |
-| `convection_darcy` | convection | Darcy | $`0.45`$ | $`2.0`$ | $`40`$ | `port_frac=0.5` | `y` | flow $`280`$, heat $`400`$, filter $`200`$ |
+| `conduction_tree` | conduction | none | $`0.30`$ | $`1.5`$ | $`0`$ | cold `face:bottom:frac=0.08` | `x` | heat $`800`$, filter $`200`$ |
+| `convection_darcy` | convection | Darcy | $`0.45`$ | $`2.0`$ | $`40`$ | `port_frac=0.5` | `y` | flow $`280`$, heat $`800`$, filter $`200`$ |
 | `conjugate_darcy` | both | Darcy | $`0.45`$ | $`2.0`$ | $`40`$ | same ports | `y` | same |
-| `conjugate_stokes` | both | Stokes | $`0.45`$ | $`2.0`$ | $`40`$ | same; $`\Delta p=20`$ | `y` | flow $`80`$, Uzawa $`80`$, Schur $`200`$, heat $`320`$, filter $`120`$ |
-| `custom_faces` | conduction | none | $`0.40`$ | $`2.0`$ | $`0`$ | hot/cold faces `frac=0.5`; $`q=0`$ | `x` | heat $`400`$, filter $`200`$ |
-| `custom_boxes` | conduction | none | $`0.40`$ | $`2.0`$ | $`0`$ | hot `box:0.2,0.8,0.0,0.18`; cold box + `face:left`; $`q=0`$ | none | heat $`400`$, filter $`200`$ |
-| `localized_source` | conduction | none | $`0.30`$ | $`1.5`$ | $`0`$ | `q_specs=box:0.3,0.7,0.70,1.0`; cold `frac=0.08` | `x` | heat $`400`$, filter $`200`$ |
+| `conjugate_stokes` | both | Stokes | $`0.45`$ | $`2.0`$ | $`40`$ | same; $`\Delta p=20`$ | `y` | flow $`80`$, Uzawa $`80`$, Schur $`200`$, heat $`800`$, filter $`120`$ |
+| `custom_faces` | conduction | none | $`0.40`$ | $`2.0`$ | $`0`$ | hot/cold faces `frac=0.5`; $`q=0`$ | `x` | heat $`800`$, filter $`200`$ |
+| `custom_boxes` | conduction | none | $`0.40`$ | $`2.0`$ | $`0`$ | hot `box:0.2,0.8,0.0,0.18`; cold box + `face:left`; $`q=0`$ | none | heat $`800`$, filter $`200`$ |
+| `localized_source` | conduction | none | $`0.30`$ | $`1.5`$ | $`0`$ | `q_specs=box:0.3,0.7,0.70,1.0`; cold `frac=0.08` | `x` | heat $`800`$, filter $`200`$ |
 
 ### 8.3 Optimizer kwargs
 
@@ -375,6 +394,7 @@ Gallery uses $`\ell_0=0.12`$.
 | `T`, `p`, `speed`, `face_vel` | fields |
 | `V` | $`\mathrm{mean}(\bar{\gamma})`$ |
 | `energy_rms` | RMS energy residual |
+| `energy_rel` | energy residual RMS / inhomogeneous-data RMS |
 | `div_rms` | $`\|\nabla\cdot\mathbf{u}\|_{\mathrm{rms}}`$ |
 | `u_in`, `u_out`, `mass_err` | port flux; $`\lvert u_{\mathrm{in}}-u_{\mathrm{out}}\rvert/(\lvert u_{\mathrm{in}}\rvert+\varepsilon)`$ |
 | `stokes_rel` | relative Stokes residual ($`0`$ if not Stokes) |
@@ -394,7 +414,9 @@ python -m topoopt verify
 python examples/06_mms_check.py
 ```
 
-CI: same pytest on Python 3.14 (`[cpu,dev]`; no gallery).
+CI: pytest on Python 3.10 and 3.12 (Linux and Windows), wheel/sdist,
+and manuscript integrity when local publication artifacts are present.
+Article sources are kept locally and are not in this repository.
 
 | Check | Setup | Expect |
 |---|---|---|
@@ -411,7 +433,8 @@ CI: same pytest on Python 3.14 (`[cpu,dev]`; no gallery).
 `python -m topoopt verify` is a short physics check, not a crisp-design
 run. Short-run numbers: `examples/reference.json`. Snapshots:
 `docs/figures/`. Gallery (`examples/gallery.py`): $`80\times 80`$
-(Stokes $`48\times 48`$), $`\ell_0=0.12`$, $`\beta_{\max}=32`$.
+(Stokes $`48\times 48`$, Schur $`400`$, heat $`1200`$), $`\ell_0=0.12`$,
+$`\beta_{\max}=32`$.
 
 ## 10. Limitations
 
@@ -421,7 +444,10 @@ run. Short-run numbers: `examples/reference.json`. Snapshots:
   and a thicker gray band of width $`\sim r`$. Tanh still leaves a
   gray interface of a few cells.
 - Brinkman solid leaks; first-order upwind adds diffusion at high $`\mathrm{Pe}`$.
-- Krylov caps: high-$`\beta`$ residuals can stay above $`10^{-2}`$.
+- Krylov caps: high-$`\beta`$ residuals can stay above $`10^{-2}`$ on
+  convective meshes larger than $`48^2`$ (BiCGSTAB). Smaller Pe$>0$
+  meshes factor the energy operator densely. Keep-best then returns
+  the highest $`\beta`$ that still solved.
 - Conduction + small sink chatters for $`\beta\gtrsim 16`$; return the
   high-$`\beta`$ design, not a mid-continuation gray field.
 - Flow modes have no conduction sink. Do not add one to hide a block.

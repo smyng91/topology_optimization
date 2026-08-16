@@ -9,7 +9,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from topoopt.config import ColdPlateParams
-from topoopt.flow2d import stokes_residual
+from topoopt.flow2d import stokes_relative_residual
 from topoopt.grid import cell_divergence, port_mask
 from topoopt.heat import energy_operator
 from topoopt.interpolation import conductivity
@@ -22,6 +22,17 @@ def energy_residual_rms(phys, temperature, face_vel, params: ColdPlateParams):
     q = volume_source_field(params)
     res = energy_operator(temperature, k, face_vel, params, params.t_in, params.t_hot, q)
     return jnp.sqrt(jnp.mean(res**2))
+
+
+def energy_residual_rel(phys, temperature, face_vel, params: ColdPlateParams):
+    """Residual RMS scaled by the inhomogeneous-data RMS (the linear-system right-hand side)."""
+    k = conductivity(phys, params)
+    q = volume_source_field(params)
+    res = energy_operator(temperature, k, face_vel, params, params.t_in, params.t_hot, q)
+    rhs = -energy_operator(
+        jnp.zeros_like(temperature), k, face_vel, params, params.t_in, params.t_hot, q
+    )
+    return jnp.sqrt(jnp.mean(res**2)) / (jnp.sqrt(jnp.mean(rhs**2)) + 1e-12)
 
 
 def port_mass(face_vel, params: ColdPlateParams):
@@ -45,9 +56,10 @@ def grayness(phys, lo: float = 0.05, hi: float = 0.95):
 
 
 def stokes_residual_rel(phys, face_vel, pressure, params: ColdPlateParams):
-    """Relative Stokes residual norm (cheap; no extra linear solve)."""
-    res = stokes_residual((face_vel[0], face_vel[1], pressure), phys, params)
-    return jnp.sqrt(sum(jnp.vdot(r, r) for r in res)) / (1.0 + jnp.linalg.norm(face_vel[0]))
+    """Residual norm relative to the inhomogeneous pressure-drive vector."""
+    return stokes_relative_residual(
+        (face_vel[0], face_vel[1], pressure), phys, params
+    )
 
 
 def field_diagnostics(phys, face_vel, pressure, temperature, speed, params: ColdPlateParams):
@@ -59,6 +71,7 @@ def field_diagnostics(phys, face_vel, pressure, temperature, speed, params: Cold
         stokes_rel = jnp.zeros(())
     return {
         "energy_rms": energy_residual_rms(phys, temperature, face_vel, params),
+        "energy_rel": energy_residual_rel(phys, temperature, face_vel, params),
         "div_rms": jnp.sqrt(jnp.mean(cell_divergence(face_vel, params.dx) ** 2)),
         "u_in": u_in,
         "u_out": u_out,

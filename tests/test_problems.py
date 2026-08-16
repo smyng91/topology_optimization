@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from examples.problems import (
     PROBLEMS,
     SOURCE_BOX,
@@ -52,7 +54,7 @@ def test_example_problem_boundary_conditions():
 
 
 def test_load_params_module_and_overrides():
-    params = load_params("examples.problems:convection_darcy", nx=12, ny=10, pe=8.0)
+    params = load_params("convection_darcy", nx=12, ny=10, pe=8.0)
     assert params.n == (12, 10)
     assert params.pe == 8.0
     assert params.heat_mode == "convection"
@@ -96,3 +98,35 @@ def test_package_config_does_not_import_examples():
     source = inspect.getsource(cfg)
     assert "import examples" not in source
     assert "from examples" not in source
+
+
+def test_config_rejects_unknown_keys_and_untrusted_python(tmp_path):
+    with pytest.raises(ValueError, match="unknown configuration keys"):
+        params2d(nx=8, ny=8, solver_tlo=1e-7)
+
+    factory = tmp_path / "factory.py"
+    factory.write_text(
+        "from topoopt.config import params2d\n"
+        "def build():\n"
+        "    return params2d(nx=8, ny=8)\n",
+        encoding="utf-8",
+    )
+    spec = f"{factory}:build"
+    with pytest.raises(ValueError, match="disabled"):
+        load_params(spec)
+    assert load_params(spec, allow_unsafe_python=True).n == (8, 8)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"vol_frac": 1.0},
+        {"solver_tol": 0.0},
+        {"q_k": -1.0},
+        {"port_frac": 0.0},
+        {"heat_iters": 0},
+    ],
+)
+def test_invalid_parameter_ranges_are_rejected(overrides):
+    with pytest.raises(ValueError):
+        params2d(nx=8, ny=8, **overrides)

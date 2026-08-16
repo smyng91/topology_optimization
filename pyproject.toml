@@ -4,20 +4,28 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "topoopt"
-version = "0.4.0"
+version = "0.5.0"
 description = "JAX topology optimization of a 2-D heated box"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
+license = {file = "LICENSE"}
 dependencies = [
     "jax>=0.4.30,<0.13",
     "jaxlib>=0.4.30,<0.13",
     "numpy>=1.26,<3",
     "matplotlib>=3.8,<4",
 ]
+
+[project.urls]
+Homepage = "https://github.com/smyng91/topology_optimization"
+Issues = "https://github.com/smyng91/topology_optimization/issues"
 
 [project.optional-dependencies]
 cpu = ["jax[cpu]"]

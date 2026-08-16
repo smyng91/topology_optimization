@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+title: "topoopt: implicit-adjoint finite-volume topology optimization of two-dimensional conjugate heat transfer"
+message: If you use this software, please cite it as below.
+type: software
+authors:
+  - family-names: Yang
+    given-names: Sam
+    email: smyng@gatech.edu
+    affiliation: Center for Advanced Power Systems, Florida State University
+license: MIT
+repository-code: https://github.com/smyng91/topology_optimization
+version: 0.5.0
+date-released: "2026-08-16"

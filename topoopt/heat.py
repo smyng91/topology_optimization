@@ -28,7 +28,10 @@ from topoopt.regions import (
     volume_heat_from_cells,
     volume_source_field,
 )
-from topoopt.solvers import implicit_nonsym_solve
+from topoopt.solvers import implicit_dense_solve, implicit_nonsym_solve, implicit_spd_solve
+
+# Pe > 0 meshes at or below this size factor the FV energy operator densely.
+ENERGY_DENSE_MAX_CELLS = 48 * 48
 
 
 def _diffusion_divergence(T, k, dxs):
@@ -86,10 +89,23 @@ def _advection_udotgrad(T, face_vel, params: ColdPlateParams, t_in, t_hot):
 
 
 def energy_operator(T, k, face_vel, params: ColdPlateParams, t_in, t_hot, q=0.0):
-    """Linear residual −∇·(k∇T) + Pe u·∇T − q including inhomogeneous BCs."""
-    diff = _diffusion_divergence(T, k, params.dx)
-    diff = apply_face_dirichlet_diffusion(diff, T, k, params, t_hot, t_in)
-    residual = -diff + _advection_udotgrad(T, face_vel, params, t_in, t_hot) - q
+    """Linear residual with symmetric elimination of cell Dirichlet values.
+
+    Dirichlet cells remain in the vector with identity rows, but their
+    columns are eliminated from neighboring equations by substituting the
+    prescribed values before flux assembly. The conduction-only operator is
+    therefore symmetric positive definite and is valid for CG and its
+    transpose/adjoint solve.
+    """
+    hot, cold = cell_dirichlet_masks(params)
+    prescribed = jnp.where(hot, t_hot, jnp.where(cold, t_in, T))
+    diff = _diffusion_divergence(prescribed, k, params.dx)
+    diff = apply_face_dirichlet_diffusion(diff, prescribed, k, params, t_hot, t_in)
+    residual = (
+        -diff
+        + _advection_udotgrad(prescribed, face_vel, params, t_in, t_hot)
+        - q
+    )
     return apply_cell_dirichlet(residual, T, params, t_hot, t_in)
 
 
@@ -130,9 +146,17 @@ def solve_energy(gamma, face_vel, params: ColdPlateParams, q=None):
         jnp.zeros_like(gamma), k, face_vel, params, params.t_in, params.t_hot, q
     )
     diag = energy_diagonal(k, face_vel, params)
-    return implicit_nonsym_solve(
-        matvec, rhs, diag, niter=params.heat_iters, tol=params.solver_tol
-    )
+    # Pe = 0 ⇒ SPD diffusion, CG. Pe > 0 on a small 2-D mesh ⇒ dense
+    # factor of the FV operator (Krylov stagnates at high contrast).
+    # Larger convective meshes keep Jacobi BiCGSTAB.
+    n_cells = int(params.n[0] * params.n[1])
+    if params.effective_pe == 0.0:
+        solve = implicit_spd_solve
+    elif n_cells <= ENERGY_DENSE_MAX_CELLS:
+        solve = implicit_dense_solve
+    else:
+        solve = implicit_nonsym_solve
+    return solve(matvec, rhs, diag, niter=params.heat_iters, tol=params.solver_tol)
 
 
 def total_heat_transfer(gamma, T, params: ColdPlateParams):

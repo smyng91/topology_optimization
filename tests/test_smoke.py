@@ -85,17 +85,16 @@ def test_darcy_2d_adjoint_matches_fd():
 
 
 def test_stokes_2d_residual_small_on_solve():
-    from topoopt.flow2d import solve_stokes, stokes_residual
+    from topoopt.flow2d import solve_stokes, stokes_relative_residual
     from topoopt.grid import port_mask
     from topoopt.heat import solve_energy
 
     params = conjugate_stokes(nx=12, ny=12, flow_iters=80, uzawa_iters=40, stokes_kryl_iters=200)
     gamma = jnp.zeros(params.n)
     sol = solve_stokes(gamma, params)
-    res = stokes_residual(sol, gamma, params)
-    rel = float(jnp.sqrt(sum(jnp.vdot(r, r) for r in res))) / (1.0 + float(jnp.linalg.norm(sol[0])))
+    rel = float(stokes_relative_residual(sol, gamma, params))
     assert np.isfinite(rel)
-    assert rel < 2e-3
+    assert rel < 1e-5
     u, v, _p = sol
     mask = port_mask(params)
     u_in = float(jnp.sum(u[0] * mask))

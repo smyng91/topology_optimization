@@ -8,8 +8,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from examples.problems import conduction_tree, convection_darcy
 from topoopt.optimize import (
+    NoTrustworthyResultError,
     RunawaySolveError,
     beta_schedule,
     highest_beta_best,
@@ -18,6 +18,7 @@ from topoopt.optimize import (
     optimize_hierarchy,
     runaway_reason,
 )
+from examples.problems import conduction_tree, convection_darcy, conjugate_stokes
 from topoopt.problem import analyze
 from topoopt.symmetry import max_error
 
@@ -28,6 +29,7 @@ def test_analyze_diagnostics_conduction():
     j, aux = analyze(gamma, 4.0, params)
     assert np.isfinite(float(j))
     assert float(aux["energy_rms"]) < 1e-3
+    assert float(aux["energy_rel"]) < 1e-4
     assert float(aux["div_rms"]) < 1e-12
     assert float(aux["mass_err"]) == 0.0
     assert float(aux["u_in"]) == 0.0
@@ -57,7 +59,7 @@ def test_short_conduction_optimize(tmp_path):
     _g, aux, hist = optimize(
         params, n_iters=10, lr=0.2, beta_max=4.0, seed=0, outdir=tmp_path
     )
-    assert abs(hist[-1]["vol"] - params.vol_frac) < 1e-3
+    assert max(abs(h["vol"] - params.vol_frac) for h in hist) < 1e-8
     assert max(h["J"] for h in hist) > hist[0]["J"]
     assert (tmp_path / "history.json").is_file()
     assert (tmp_path / "run.json").is_file()
@@ -94,6 +96,37 @@ def test_highest_beta_best_rejects_softer_projection():
     assert rec["J"] == pytest.approx(-0.0135)
 
 
+def test_highest_beta_best_skips_unconverged_energy():
+    hist = [
+        {"iter": 1, "beta": 4.0, "J": -0.10, "energy_rms": 1e-4},
+        {"iter": 20, "beta": 8.0, "J": -0.02, "energy_rms": 2.4},
+        {"iter": 21, "beta": 8.0, "J": -0.08, "energy_rms": 5e-4},
+    ]
+    rec = highest_beta_best(hist)
+    assert rec["iter"] == 21
+    assert rec["J"] == pytest.approx(-0.08)
+
+    hist_rel = [
+        {"iter": 1, "beta": 8.0, "J": -0.09, "energy_rel": 2.0, "energy_rms": 1e-4},
+        {"iter": 2, "beta": 8.0, "J": -0.07, "energy_rel": 1e-5, "energy_rms": 1e-3},
+    ]
+    assert highest_beta_best(hist_rel)["iter"] == 2
+
+
+def test_highest_beta_best_has_no_untrustworthy_fallback():
+    history = [
+        {
+            "iter": 1,
+            "beta": 8.0,
+            "J": -0.01,
+            "energy_rel": 2.0,
+            "energy_rms": 1.0,
+        }
+    ]
+    with pytest.raises(NoTrustworthyResultError):
+        highest_beta_best(history)
+
+
 def test_keep_best_and_stall_are_per_beta_level(tmp_path):
     params = conduction_tree(nx=12, ny=12, filter_iters=20, heat_iters=80)
     _g, aux, hist = optimize(
@@ -118,7 +151,7 @@ def test_short_darcy_optimize(tmp_path):
     _g, aux, hist = optimize(
         params, n_iters=8, lr=0.2, beta_max=4.0, seed=0, outdir=tmp_path
     )
-    assert abs(hist[-1]["vol"] - params.vol_frac) < 1e-3
+    assert max(abs(h["vol"] - params.vol_frac) for h in hist) < 1e-8
     j_best = max(h["J"] for h in hist)
     t0 = hist[0]["T_mean"]
     assert j_best > hist[0]["J"] or hist[-1]["T_mean"] < t0
@@ -151,6 +184,24 @@ def test_runaway_reason_and_hierarchy(tmp_path):
         stall_iters=0,
     )
     assert gamma.shape == (16, 16)
-    assert abs(hist[-1]["vol"] - params.vol_frac) < 1e-2
+    assert abs(hist[-1]["vol"] - params.vol_frac) < 1e-8
     assert float(max_error(gamma, params._replace(n=(16, 16)))) < 1e-12
     assert RunawaySolveError is RuntimeError or issubclass(RunawaySolveError, RuntimeError)
+
+
+def test_stokes_volume_accounts_for_port_pin(tmp_path):
+    params = conjugate_stokes(
+        nx=12,
+        ny=12,
+        flow_iters=80,
+        uzawa_iters=40,
+        stokes_kryl_iters=200,
+        heat_iters=120,
+        filter_iters=20,
+    )
+    _g, aux, hist = optimize(
+        params, n_iters=4, lr=0.16, beta_max=2.0, seed=0, outdir=tmp_path, stall_iters=0
+    )
+    assert max(abs(h["vol"] - params.vol_frac) for h in hist) < 1e-8
+    assert abs(float(aux["V"]) - params.vol_frac) < 1e-8
+    assert np.isfinite(float(aux["energy_rms"]))

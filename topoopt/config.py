@@ -1,14 +1,15 @@
 """Generic 2-D parameter object and loader.
 
 Research cases (geometry, ports, hot/cold patches) live in
-``examples/problems.py``. This module does not infer BCs from ``heat_mode``.
+``topoopt.problems``. This module does not infer BCs from ``heat_mode``.
 
-``load_params`` accepts a Python factory (``module:func`` / ``path.py:func``)
-or a JSON / YAML file. The package does not import ``examples.problems``.
+``load_params`` accepts a registered factory name, a JSON / YAML file,
+or---only with ``allow_unsafe_python=True``---a Python factory.
 """
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Literal, NamedTuple
 
@@ -60,10 +61,12 @@ class ColdPlateParams(NamedTuple):
         tolerance. flow_iters — Darcy CG / Stokes momentum CG. uzawa_iters
         — Stokes pressure-correction warm start. stokes_kryl_iters —
         pressure-Schur CG (0 skips the correction). heat_iters —
-        energy BiCGSTAB. filter_iters — Helmholtz CG (unused by cone).
+        energy CG (Pe = 0) or BiCGSTAB (Pe > 0 and n > 48²). Unused
+        when Pe > 0 and n ≤ 48² (dense factor of the energy operator).
+        filter_iters — Helmholtz CG (unused by cone).
     Unused by the PDE
-        u_in_max — peak of ``grid.inlet_profile`` (parabolic). Current
-        Darcy/Stokes solves are pressure-driven and do not prescribe it.
+        u_in_max — unused; retained for config compatibility. Current
+        Darcy/Stokes solves are pressure-driven and do not prescribe inlet speed.
     """
 
     n: tuple[int, int]
@@ -100,7 +103,7 @@ class ColdPlateParams(NamedTuple):
     flow_iters: int = 80
     uzawa_iters: int = 80
     stokes_kryl_iters: int = 200
-    heat_iters: int = 400
+    heat_iters: int = 800
     filter_iters: int = 200
 
     @property
@@ -140,6 +143,65 @@ class ColdPlateParams(NamedTuple):
         return hx * hy
 
 
+def validate_params(params: ColdPlateParams) -> ColdPlateParams:
+    """Validate physical ranges and reject configurations that cannot be solved."""
+
+    def finite(name: str, value: float) -> float:
+        value = float(value)
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be finite, got {value!r}")
+        return value
+
+    if len(params.n) != 2 or any(int(value) != value or int(value) < 2 for value in params.n):
+        raise ValueError(f"n must contain two integers >= 2, got {params.n!r}")
+    if len(params.L) != 2 or any(finite("L", value) <= 0.0 for value in params.L):
+        raise ValueError(f"L must contain two positive lengths, got {params.L!r}")
+    if params.heat_mode not in HEAT_MODES:
+        raise ValueError(f"heat_mode must be one of {HEAT_MODES}, got {params.heat_mode!r}")
+    if params.flow_model not in ("stokes", "darcy"):
+        raise ValueError(f"flow_model must be 'stokes' or 'darcy', got {params.flow_model!r}")
+    if not 0.0 < finite("vol_frac", params.vol_frac) < 1.0:
+        raise ValueError(f"vol_frac must lie strictly between 0 and 1, got {params.vol_frac!r}")
+    if finite("pe", params.pe) < 0.0:
+        raise ValueError(f"pe must be non-negative, got {params.pe!r}")
+    if finite("q_vol", params.q_vol) < 0.0:
+        raise ValueError(f"q_vol must be non-negative, got {params.q_vol!r}")
+    if finite("k_fluid", params.k_fluid) <= 0.0 or finite("k_solid", params.k_solid) <= 0.0:
+        raise ValueError("k_fluid and k_solid must be positive")
+    if any(finite(name, value) < 0.0 for name, value in (("q_k", params.q_k), ("q_kappa", params.q_kappa))):
+        raise ValueError("RAMP q_k and q_kappa must be non-negative")
+    if finite("q_alpha", params.q_alpha) <= 0.0:
+        raise ValueError("q_alpha must be positive")
+    if not 0.0 <= finite("alpha_min", params.alpha_min) < finite("alpha_max", params.alpha_max):
+        raise ValueError("require 0 <= alpha_min < alpha_max")
+    if not 0.0 < finite("kappa_min", params.kappa_min) <= finite("kappa_max", params.kappa_max):
+        raise ValueError("require 0 < kappa_min <= kappa_max")
+    if finite("p_in", params.p_in) <= 0.0 or finite("stokes_dp", params.stokes_dp) <= 0.0:
+        raise ValueError("p_in and stokes_dp must be positive")
+    if finite("rmin", params.rmin) <= 0.0:
+        raise ValueError("rmin must be positive")
+    if not 0.0 < finite("eta", params.eta) < 1.0:
+        raise ValueError("eta must lie strictly between 0 and 1")
+    if not 0.0 < finite("port_frac", params.port_frac) <= 1.0:
+        raise ValueError("port_frac must lie in (0, 1]")
+    if finite("div_eps", params.div_eps) < 0.0:
+        raise ValueError("div_eps must be non-negative")
+    if finite("solver_tol", params.solver_tol) <= 0.0:
+        raise ValueError("solver_tol must be positive")
+    for name in ("flow_iters", "uzawa_iters", "stokes_kryl_iters"):
+        value = getattr(params, name)
+        if int(value) != value or int(value) < 0:
+            raise ValueError(f"{name} must be a non-negative integer, got {value!r}")
+    for name in ("heat_iters", "filter_iters"):
+        value = getattr(params, name)
+        if int(value) != value or int(value) <= 0:
+            raise ValueError(f"{name} must be a positive integer, got {value!r}")
+    overlap = set(params.hot_specs) & set(params.cold_specs)
+    if overlap:
+        raise ValueError(f"the same region cannot be both hot and cold: {sorted(overlap)!r}")
+    return params
+
+
 def add_heat_mode_argument(parser) -> None:
     parser.add_argument(
         "--heat",
@@ -161,6 +223,7 @@ _FILE_KEYS = set(ColdPlateParams._fields) | {
     "n",
     "L",
     "factory",
+    "comment",
 }
 
 
@@ -192,16 +255,32 @@ def params2d(
     **kwargs,
 ) -> ColdPlateParams:
     """Assemble a 2-D parameter set. BCs are not inferred from ``heat_mode``."""
-    return ColdPlateParams(n=(nx, ny), L=(lx, ly), **coerce_param_kwargs(kwargs))
+    unknown = set(kwargs) - set(ColdPlateParams._fields)
+    if unknown:
+        raise ValueError(f"unknown configuration keys: {sorted(unknown)!r}")
+    return validate_params(
+        ColdPlateParams(n=(nx, ny), L=(lx, ly), **coerce_param_kwargs(kwargs))
+    )
 
 
-def params_from_dict(data: dict, **overrides) -> ColdPlateParams:
-    """Build params from a JSON/YAML object. Unknown keys (e.g. ``comment``) are ignored."""
-    merged = {k: v for k, v in {**data, **overrides}.items() if k in _FILE_KEYS}
+def params_from_dict(
+    data: dict,
+    *,
+    allow_unsafe_python: bool = False,
+    **overrides,
+) -> ColdPlateParams:
+    """Build params from a JSON/YAML object and reject misspelled keys."""
+    unknown = (set(data) | set(overrides)) - _FILE_KEYS
+    if unknown:
+        raise ValueError(f"unknown configuration keys: {sorted(unknown)!r}")
+    merged = {**data, **overrides}
+    merged.pop("comment", None)
     merged = coerce_param_kwargs(merged)
     factory = merged.pop("factory", None)
     if factory:
-        return load_params(str(factory), **merged)
+        return load_params(
+            str(factory), allow_unsafe_python=allow_unsafe_python, **merged
+        )
     nx = merged.pop("nx", None)
     ny = merged.pop("ny", None)
     n = merged.pop("n", None)
@@ -211,7 +290,7 @@ def params_from_dict(data: dict, **overrides) -> ColdPlateParams:
     if n is not None:
         if L is None:
             L = (lx if lx is not None else 1.0, ly if ly is not None else 1.0)
-        return ColdPlateParams(n=tuple(n), L=tuple(L), **merged)
+        return validate_params(ColdPlateParams(n=tuple(n), L=tuple(L), **merged))
     return params2d(
         nx=40 if nx is None else int(nx),
         ny=40 if ny is None else int(ny),
@@ -241,14 +320,21 @@ def _read_params_file(path: Path) -> dict:
     return data
 
 
-def load_params(spec: str, **overrides) -> ColdPlateParams:
+def load_params(
+    spec: str,
+    *,
+    allow_unsafe_python: bool = False,
+    **overrides,
+) -> ColdPlateParams:
     """Load a problem factory or a JSON/YAML file.
 
-    * ``module:callable`` — ``examples.problems:convection_darcy``
-    * ``path.py:callable`` — ``examples/problems.py:convection_darcy``
+    * registered factory — ``convection_darcy`` or
+      ``topoopt.problems:convection_darcy``
     * ``path.json`` / ``path.yaml`` — a parameter object, optionally with
-      a ``factory`` key that is itself a ``module:callable``
+      a registered ``factory`` key
 
+    Arbitrary ``module:callable`` and ``path.py:callable`` execution is
+    disabled unless ``allow_unsafe_python=True`` is supplied explicitly.
     Extra keywords override the file or are forwarded to the factory.
     """
     import importlib
@@ -256,10 +342,33 @@ def load_params(spec: str, **overrides) -> ColdPlateParams:
 
     path = Path(spec)
     if spec.endswith((".json", ".yaml", ".yml")) or path.suffix.lower() in {".json", ".yaml", ".yml"}:
-        return params_from_dict(_read_params_file(path), **overrides)
+        return params_from_dict(
+            _read_params_file(path),
+            allow_unsafe_python=allow_unsafe_python,
+            **overrides,
+        )
+
+    from topoopt.problems import PROBLEMS
+
+    registered_name = spec
+    if ":" in spec:
+        module_name, candidate = spec.rsplit(":", 1)
+        if module_name in ("topoopt.problems", "examples.problems"):
+            registered_name = candidate
+    if registered_name in PROBLEMS:
+        return validate_params(
+            PROBLEMS[registered_name](**coerce_param_kwargs(overrides))
+        )
+
     if ":" not in spec:
         raise ValueError(
-            "expected module:function, path.py:function, or a .json/.yaml file, got %r" % spec
+            "expected a registered factory, module:function, path.py:function, "
+            "or a .json/.yaml file, got %r" % spec
+        )
+    if not allow_unsafe_python:
+        raise ValueError(
+            f"unregistered Python factory {spec!r} is disabled; pass "
+            "allow_unsafe_python=True only for trusted input"
         )
     target, name = spec.rsplit(":", 1)
     if target.endswith(".py"):
@@ -275,5 +384,10 @@ def load_params(spec: str, **overrides) -> ColdPlateParams:
     if not callable(obj):
         if overrides:
             raise TypeError(f"{spec} is not callable; cannot apply overrides")
-        return obj
-    return obj(**coerce_param_kwargs(overrides))
+        if not isinstance(obj, ColdPlateParams):
+            raise TypeError(f"{spec} did not resolve to ColdPlateParams")
+        return validate_params(obj)
+    result = obj(**coerce_param_kwargs(overrides))
+    if not isinstance(result, ColdPlateParams):
+        raise TypeError(f"{spec} returned {type(result).__name__}, not ColdPlateParams")
+    return validate_params(result)

@@ -1,8 +1,9 @@
 """Fine-mesh gallery of the named cases in ``examples/problems.py``.
 
 ``optimize`` uses ``lr=0.12``, ``beta_max=32``, ``seed=0``. Full meshes:
-80×80 / 150–200 iters (Stokes 48×48 / 100, Uzawa 250). ``--quick`` is
-16×16 / 8 iters (Stokes 12×12 / 4). See ``examples/README.md``.
+80×80 / 150–200 iters (Stokes 48×48 / 100, Uzawa 250, Schur 400,
+heat 1200). ``--quick`` is 16×16 / 8 iters (Stokes 12×12 / 4).
+See ``examples/README.md``.
 """
 
 from __future__ import annotations
@@ -50,7 +51,7 @@ def _cases(quick=False):
             ("2d_custom_faces", custom_faces(nx=16, ny=16, **coarse), 8),
             ("2d_custom_boxes", custom_boxes(nx=16, ny=16, **coarse), 8),
         ]
-    fine = dict(filter_iters=200, heat_iters=400, flow_iters=280)
+    fine = dict(filter_iters=200, heat_iters=800, flow_iters=280)
     return [
         ("2d_conduction", conduction_tree(nx=80, ny=80, rmin=1.5, **fine), 200),
         ("2d_convection_darcy", convection_darcy(nx=80, ny=80, **fine), 150),
@@ -62,9 +63,10 @@ def _cases(quick=False):
                 ny=48,
                 rmin=2.0,
                 filter_iters=120,
-                heat_iters=320,
+                heat_iters=1200,
                 flow_iters=250,
                 uzawa_iters=250,
+                stokes_kryl_iters=400,
             ),
             100,
         ),

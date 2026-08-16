@@ -1,3 +1,10 @@
+# Manuscript / publication (local only; never pushed)
+paper/
+*.aux
+*.bbl
+*.blg
+*.synctex.gz
+
 # Python
 __pycache__/
 *.py[cod]

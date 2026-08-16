@@ -46,6 +46,7 @@ def print_fields(aux, extra: dict | None = None):
         "u_out",
         "mass_err",
         "energy_rms",
+        "energy_rel",
         "div_rms",
         "stokes_rel",
         "gray",

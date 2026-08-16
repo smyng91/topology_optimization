@@ -6,7 +6,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from examples.problems import TREE_SINK, conduction_tree, conjugate_darcy, conjugate_stokes, convection_darcy
+from examples.problems import TREE_SINK, conduction_tree, conjugate_darcy, conjugate_stokes, convection_darcy, custom_faces
 from topoopt.config import params2d
 from topoopt.heat import energy_operator, solve_energy
 from topoopt.interpolation import conductivity
@@ -86,7 +86,7 @@ def test_darcy_open_channel_is_divergence_free():
 
 
 def test_stokes_pressure_ports_channel_beats_block():
-    from topoopt.flow2d import solve_stokes, stokes_residual
+    from topoopt.flow2d import solve_stokes, stokes_relative_residual
     from topoopt.grid import cell_divergence, port_mask
     from topoopt.heat import solve_energy
 
@@ -107,8 +107,7 @@ def test_stokes_pressure_ports_channel_beats_block():
     def _flow(g):
         sol = solve_stokes(g, params)
         u, v, _p = sol
-        res = stokes_residual(sol, g, params)
-        rel = float(jnp.sqrt(sum(jnp.vdot(r, r) for r in res))) / (1.0 + float(jnp.linalg.norm(u)))
+        rel = float(stokes_relative_residual(sol, g, params))
         u_in = float(jnp.sum(u[0] * mask))
         u_out = float(jnp.sum(u[-1] * mask))
         div_rms = float(jnp.sqrt(jnp.mean(cell_divergence([u, v], params.dx) ** 2)))
@@ -118,7 +117,7 @@ def test_stokes_pressure_ports_channel_beats_block():
     u_open, out_open, div_o, rel_o, t_open = _flow(jnp.zeros(params.n))
     u_ch, out_ch, div_c, rel_c, t_ch = _flow(channel)
     u_blk, out_blk, div_b, rel_b, t_blk = _flow(jnp.ones(params.n))
-    assert rel_o < 2e-3 and rel_c < 2e-3
+    assert rel_o < 1e-5 and rel_c < 1e-5
     assert u_open > 0.5 and abs(u_open - out_open) / u_open < 0.03
     assert u_ch > 0.2 and abs(u_ch - out_ch) / u_ch < 0.05
     assert u_blk < 0.05 * u_open
@@ -213,6 +212,38 @@ def test_conduction_energy_residual_small():
     q = volume_source_field(params)
     res = energy_operator(temp, k, faces, params, params.t_in, params.t_hot, q)
     assert float(jnp.sqrt(jnp.mean(res**2))) < 1e-3
+
+
+def test_high_beta_conduction_energy_converges():
+    """CG on Pe=0 must solve high-contrast tanh fields, not stagnate."""
+    from topoopt.optimize import project_design
+
+    params = custom_faces(nx=24, ny=24, heat_iters=400, filter_iters=40)
+    gamma = project_design(jnp.full(params.n, params.vol_frac), 16.0, params)
+    j, aux = analyze(gamma, 16.0, params)
+    assert np.isfinite(float(j))
+    assert float(aux["energy_rel"]) < 1e-4
+    assert float(aux["energy_rms"]) < 1e-3
+
+
+def test_stokes_channel_energy_dense():
+    """Pe>0 energy on a small Stokes mesh factors densely and should solve."""
+    from topoopt.optimize import project_design, _initial_guess
+
+    params = conjugate_stokes(
+        nx=24,
+        ny=24,
+        heat_iters=400,
+        flow_iters=40,
+        uzawa_iters=40,
+        stokes_kryl_iters=80,
+        filter_iters=20,
+    )
+    gamma = project_design(_initial_guess(params, 0, None), 8.0, params)
+    j, aux = analyze(gamma, 8.0, params)
+    assert np.isfinite(float(j))
+    assert float(aux["energy_rel"]) < 1e-8
+    assert float(aux["u_in"]) > 0.0
 
 
 def test_localized_volume_source_heats_the_box():

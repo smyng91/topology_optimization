@@ -11,8 +11,13 @@ from topoopt.config import ColdPlateParams
 
 
 def ramp(x, lo, hi, q):
-    """RAMP map: x=0 → lo, x=1 → hi. Large q is nearly linear; small q rises toward hi quickly."""
-    return lo + (hi - lo) * x * (q + 1.0) / (x + q)
+    """Conventional Stolpe--Svanberg RAMP map.
+
+    ``x=0`` maps to ``lo`` and ``x=1`` maps to ``hi``. ``q=0`` is
+    linear; increasing non-negative ``q`` penalizes intermediate values.
+    """
+    fraction = x / (1.0 + q * (1.0 - x))
+    return lo + (hi - lo) * fraction
 
 
 def conductivity(gamma, params: ColdPlateParams):

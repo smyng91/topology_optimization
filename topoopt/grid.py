@@ -43,20 +43,6 @@ def port_mask(params: ColdPlateParams):
     return line_mask(params.n[1], params.port_frac)
 
 
-def inlet_profile(params: ColdPlateParams):
-    """Parabolic inlet speed on the centered left-wall port; zero on the rest of the wall."""
-    _, ny = params.n
-    _, ly = params.L
-    _, dy = params.dx
-    y = (jnp.arange(ny) + 0.5) * dy
-    y0 = 0.5 * ly * (1.0 - params.port_frac)
-    y1 = 0.5 * ly * (1.0 + params.port_frac)
-    span = jnp.clip(y1 - y0, 1e-12, None)
-    s = (y - y0) / span
-    para = params.u_in_max * 4.0 * s * (1.0 - s)
-    return jnp.where(port_mask(params), para, 0.0)
-
-
 def zero_face_velocity(params: ColdPlateParams):
     """MAC face-normal velocities of zero, used when the flow solve is skipped."""
     faces = []

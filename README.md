@@ -6,7 +6,10 @@ Sensitivities are discrete global adjoints. **2-D only.**
 
 The discrete model is in [docs/model.md](docs/model.md)
 ([wiki](https://github.com/smyng91/topology_optimization/wiki/Model)).
-Named cases live in [`examples/problems.py`](examples/problems.py).
+Named cases live in [`topoopt/problems.py`](topoopt/problems.py)
+(also re-exported from [`examples/problems.py`](examples/problems.py)
+for the tutorials). Prefer `--config conduction_tree` or
+`topoopt.problems:conduction_tree`.
 Rendered docs: [GitHub wiki](https://github.com/smyng91/topology_optimization/wiki).
 
 ```math
@@ -24,23 +27,26 @@ Q_{\mathrm{hot}} & \text{Dirichlet }T\text{ only}.
 Flow is Stokes–Brinkman (default) or Darcy. Heat mode `conduction` /
 `convection` / `both` selects which terms are active — not the BCs.
 The density filter is the compact cone (`--filter helmholtz` for the PDE).
+Energy at `Pe = 0` uses CG; at `Pe > 0` a mesh with at most 48² cells
+factors the finite-volume operator densely, otherwise Jacobi BiCGSTAB.
 
 ## Quickstart
 
-Python 3.14+. From the repo root:
+Python 3.10+. From the repo root:
 
 ```bash
-python3.14 -m venv .venv && source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[cpu,dev]"          # [cuda] instead of [cpu] on NVIDIA
 MPLBACKEND=Agg python -m pytest tests -q
 python examples/02_conduction_tree.py --quick
 ```
 
-`[yaml]` adds PyYAML. `jax_enable_x64` is on at import. Pins:
-[`requirements-lock.txt`](requirements-lock.txt).
+`[yaml]` adds PyYAML. `jax_enable_x64` is on at import. Development
+pins: [`requirements-lock.txt`](requirements-lock.txt). A local
+manuscript rebuild used CPython 3.11.15 and JAX 0.10.2.
 
 ```bash
-python -m topoopt 2d --config examples.problems:conduction_tree --iters 80
+python -m topoopt 2d --config conduction_tree --iters 80
 python -m topoopt 2d --heat conduction --q-region box:0.3,0.7,0.70,1.0 --cold face:bottom:frac=0.08
 python -m topoopt 2d --heat conduction --hot face:top --cold face:bottom:frac=0.5
 ```
@@ -126,15 +132,16 @@ python examples/run_all.py --quick
 | 06 | discrete-operator MMS |
 
 ```bash
-python -m topoopt 2d --config examples.problems:conduction_tree
+python -m topoopt 2d --config conduction_tree
 python -m topoopt 2d --config examples/configs/localized_source.json
 python examples/gallery.py                      # 80×80 sweep, not a tutorial
 python examples/publish_figures.py              # docs/figures/ snapshots
 ```
 
-Returned design is the best-$`J`$ iterate at the **highest $`\beta`$** that
-ran (not the global max $`J`$ across continuation). Flow modes have no
-extra cold patch; a sealed channel aborts.
+Returned design is the best-$`J`$ iterate at the **highest $`\beta`$**
+that passes every evidence gate (energy, volume, symmetry, and flow
+residuals). There is no fallback to an unconverged iterate. Flow modes
+have no extra cold patch; a sealed channel aborts.
 
 ## Validation
 
@@ -144,7 +151,8 @@ python -m topoopt verify
 python examples/06_mms_check.py
 ```
 
-CI is the same pytest command on Python 3.14 (`[cpu,dev]`; no gallery).
+CI runs pytest on Python 3.10 and 3.12 (Linux and Windows), builds the
+wheel, and checks manuscript integrity when publication artifacts exist.
 
 | Check | What |
 |---|---|
@@ -168,4 +176,27 @@ port, $`p=0`$ on the right. Forward: Uzawa warm start + CG on the
 pressure Schur complement. Adjoint: residual discrete adjoint, not
 unrolled Uzawa. A one-cell fluid pin on port *design* cells
 (`keep_ports_open`) and a mid-height channel seed are required; they
-are not PDE Dirichlet data.
+are not PDE Dirichlet data. The pin is applied *inside* the volume
+bisection so `mean(γ̄)` stays at `v*`.
+
+## Manuscript
+
+Article sources are kept locally and are not in this repository. To
+rebuild them from a local `paper/` tree:
+
+```bash
+MPLBACKEND=Agg python scripts/build_manuscript.py
+python scripts/check_manuscript_integrity.py
+python scripts/compile_paper.py
+```
+
+## Limitations
+
+2-D only. Stokes–Brinkman, not Navier–Stokes. Darcy has no no-slip.
+No MMA, no turbulence model, no temperature-dependent materials.
+Returned designs must pass every evidence gate, not only the energy
+residual. Historical `outputs/paper_runs` are not publication sources.
+
+## License
+
+[MIT](LICENSE). Citation: [`CITATION.cff`](CITATION.cff).
