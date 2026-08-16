@@ -219,6 +219,7 @@ def optimize(
         f"2-D box  n={params.n}  L={params.L}  heat={params.heat_mode} "
         f"({params.heat_label})  flow={params.flow_model if params.solves_flow else 'none'}  "
         f"Pe={params.effective_pe:g}  q={params.q_vol:g}  port={params.port_frac:g}  "
+        f"filter={params.filter_kind}  rmin={params.rmin:g}  "
         f"vol*={params.vol_frac}  symmetry={sym}\n"
         f"  hot={params.hot_specs}  cold={params.cold_specs}  q_region={params.q_specs}"
     )

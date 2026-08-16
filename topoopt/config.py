@@ -14,6 +14,8 @@ from typing import Literal, NamedTuple
 
 HeatMode = Literal["conduction", "convection", "both"]
 HEAT_MODES: tuple[HeatMode, ...] = ("conduction", "convection", "both")
+FilterKind = Literal["cone", "helmholtz"]
+FILTER_KINDS: tuple[FilterKind, ...] = ("cone", "helmholtz")
 HEAT_MODE_LABELS = {
     "conduction": "fully conductive",
     "convection": "fully convective",
@@ -37,7 +39,9 @@ class ColdPlateParams(NamedTuple):
         flow_model — ``stokes`` or ``darcy``; ignored when heat_mode is
         conduction.
     Design / interpolation
-        vol_frac — target mean(γ̄). rmin — Helmholtz radius in cells.
+        vol_frac — target mean(γ̄). rmin — filter radius in cells
+        (cone support, or Helmholtz r). filter_kind — ``cone`` (default)
+        or ``helmholtz``.
         eta — tanh-projection threshold. q_k, q_alpha, q_kappa — RAMP /
         Borrvall–Petersson sharpness. k_fluid, k_solid, alpha_*, kappa_*.
     Forcing / BCs
@@ -55,8 +59,8 @@ class ColdPlateParams(NamedTuple):
         div_eps — Stokes continuity regularizer εp. solver_tol — Krylov
         tolerance. flow_iters — Darcy CG / Stokes momentum CG. uzawa_iters
         — Stokes pressure-correction warm start. stokes_kryl_iters —
-        pressure-Schur CG (0 skips the correction). heat_iters,
-        filter_iters — energy BiCGSTAB and Helmholtz CG.
+        pressure-Schur CG (0 skips the correction). heat_iters —
+        energy BiCGSTAB. filter_iters — Helmholtz CG (unused by cone).
     Unused by the PDE
         u_in_max — peak of ``grid.inlet_profile`` (parabolic). Current
         Darcy/Stokes solves are pressure-driven and do not prescribe it.
@@ -84,6 +88,7 @@ class ColdPlateParams(NamedTuple):
     t_in: float = 0.0
     t_hot: float = 1.0
     rmin: float = 2.2
+    filter_kind: FilterKind = "cone"
     eta: float = 0.5
     port_frac: float = 0.5
     hot_specs: tuple[str, ...] = ()
@@ -166,6 +171,13 @@ def coerce_param_kwargs(data: dict) -> dict:
     out = dict(data)
     if "symmetry" in out:
         out["symmetry"] = normalize_axes(out["symmetry"])
+    if "filter_kind" in out:
+        kind = str(out["filter_kind"]).lower()
+        if kind not in FILTER_KINDS:
+            raise ValueError(
+                f"filter_kind must be one of {FILTER_KINDS}, got {out['filter_kind']!r}"
+            )
+        out["filter_kind"] = kind
     for key in _TUPLE_KEYS:
         if key in out and isinstance(out[key], list):
             out[key] = tuple(out[key])

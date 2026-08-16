@@ -2,7 +2,9 @@
 
 Named cases (geometry, ports, Dirichlet $`T`$, volumetric $`q`$, solver caps)
 are in [`problems.py`](problems.py). The package does not infer BCs from
-`--heat`. Library defaults: [docs/model.md](../docs/model.md) §8.
+`--heat`. All named cases use the compact cone filter
+(`filter_kind=cone`); `--filter helmholtz` is optional.
+Library defaults: [docs/model.md](../docs/model.md) §8.
 
 ```bash
 python -m topoopt 2d --config examples.problems:conduction_tree
@@ -48,6 +50,7 @@ Constants: `CENTERLINE_PORT=0.5`,
 | `nx`, `ny` / `n` | mesh |
 | `lx`, `ly` / `L` | box size |
 | `hot_specs`, `cold_specs`, `q_specs`, `symmetry` | string lists |
+| `filter_kind` | `cone` (default) or `helmholtz` |
 | `comment` | ignored |
 
 Examples: [`configs/conduction_tree.json`](configs/conduction_tree.json),

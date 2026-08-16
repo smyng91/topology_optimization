@@ -23,6 +23,7 @@ Q_{\mathrm{hot}} & \text{Dirichlet }T\text{ only}.
 
 Flow is Stokes–Brinkman (default) or Darcy. Heat mode `conduction` /
 `convection` / `both` selects which terms are active — not the BCs.
+The density filter is the compact cone (`--filter helmholtz` for the PDE).
 
 ## Quickstart
 
@@ -52,7 +53,7 @@ go under `outputs/` (gitignored).
 | Symbol | Code | Meaning |
 |---|---|---|
 | $`\gamma`$ | `gamma_raw` | raw design in $`[0,1]`$ |
-| $`\tilde{\gamma}`$ | filtered | Helmholtz-filtered design |
+| $`\tilde{\gamma}`$ | filtered | cone-filtered design (``--filter helmholtz`` for the PDE) |
 | $`\bar{\gamma}`$ | `phys` | tanh-projected density used in the PDEs |
 | $`\beta,\eta`$ | `beta`, `eta` | projection sharpness and threshold ($`\eta=0.5`$) |
 | $`r=r_{\min}\min(\Delta x,\Delta y)`$ | `rmin` | filter radius (`rmin` in cells) |
@@ -87,6 +88,7 @@ The library does **not** infer BCs from `--heat`. Geometry comes from
 | `--q` | $`q_{\mathrm{vol}}`$ | $`1`$ |
 | `--k-ratio` | $`k_s`$ ($`k_f=1`$) | $`100`$ |
 | `--rmin` | $`r_{\min}`$ (cells) | $`2.2`$ |
+| `--filter {cone,helmholtz}` | `filter_kind` | `cone` |
 | `--port-frac` | port height | $`0.5`$ |
 | `--hot`, `--cold` | Dirichlet $`T`$ | empty |
 | `--q-region` | volumetric $`q`$ | empty (uniform $`q`$) |
@@ -149,6 +151,7 @@ CI is the same pytest command on Python 3.14 (`[cpu,dev]`; no gallery).
 | Energy Poisson | $`T=\sin\pi x\sin\pi y`$, order $`\approx 2`$ |
 | Advective energy | uniform $`\mathbf{u}`$, order $`\gtrsim 1`$ |
 | Variable $`k`$ | discrete operator as manufactured source |
+| Cone | compact support $`d<r`$; constants unchanged |
 | Helmholtz | Neumann cosine; inverse recovers $`\gamma`$ to Krylov tol |
 | Darcy | linear $`p`$ on a full-height port |
 | Stokes | Poiseuille on a full-height $`\Delta p`$ channel |

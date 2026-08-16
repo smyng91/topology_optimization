@@ -7,7 +7,7 @@ conducting tree so heat can reach the sink. A 50% sink makes parallel
 fins instead — try ``--wide-sink`` to see the difference.
 
 ``J = -mean(T)``. Volume is an equality (``mean(γ̄) = v*``), enforced
-by a mean-zero step plus a shift after the Helmholtz filter / tanh
+by a mean-zero step plus a shift after the density filter / tanh
 projection. ``β`` doubles during the run; the move limit decays as
 ``lr / sqrt(β)``. The returned design is the best-``J`` iterate at
 the highest ``β``, not the global max ``J`` across continuation

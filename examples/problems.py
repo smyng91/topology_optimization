@@ -5,7 +5,8 @@ T patches, and volumetric ``q`` regions for the heated-box studies live
 here so you can add or swap cases without changing the library.
 
 Each factory returns a ``ColdPlateParams``. Extra keywords override the
-case defaults (mesh, solver iters, ``vol_frac``, …). The table of
+case defaults (mesh, solver iters, ``vol_frac``, …). All cases inherit
+the library cone filter (``filter_kind=cone``). The table of
 overrides is in this module's factory docstrings and in
 ``examples/README.md`` / ``docs/model.md`` §8.2.
 

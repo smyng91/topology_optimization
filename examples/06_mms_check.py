@@ -7,6 +7,7 @@ and print the relative L2 error.
 
 * Energy Poisson — ``T = sin(πx) sin(πy)``, all walls ``T = 0``, order ≈ 2
 * Helmholtz filter — Neumann cosine, continuous manufactured raw field
+  (optional ``--filter helmholtz`` PDE; designs default to the cone)
 * Darcy — linear pressure on a full-height port (should be very small)
 * Stokes–Poiseuille — full-height pressure-driven channel, ``α = 0``
   (skipped with ``--quick``)

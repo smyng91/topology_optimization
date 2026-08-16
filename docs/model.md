@@ -17,7 +17,7 @@ Wiki: https://github.com/smyng91/topology_optimization/wiki
 | Symbol | Code | Meaning |
 |---|---|---|
 | $`\gamma\in[0,1]`$ | `gamma_raw` | raw design |
-| $`\tilde{\gamma}`$ | filtered | Helmholtz-filtered design |
+| $`\tilde{\gamma}`$ | filtered | cone-filtered design (`--filter helmholtz` optional) |
 | $`\bar{\gamma}`$ | `phys` | projected density in the PDEs |
 | $`\beta,\eta`$ | `beta`, `eta` | projection sharpness; threshold $`\eta=0.5`$ |
 | $`r=r_{\min}\min(\Delta x,\Delta y)`$ | `rmin` | filter radius (`rmin` in cells, default $`2.2`$) |
@@ -39,11 +39,28 @@ poor conductor (except convection-only, where $`k\equiv k_f`$).
 
 ## 2. Design, filter, projection
 
-Helmholtz filter (Lazarov & Sigmund), Neumann boundaries, Jacobi CG:
+Default density filter is the compact linear cone (Bruns–Tortorelli /
+Bourdin). Weights are renormalized on the in-domain stencil, so a
+uniform field is unchanged at the walls:
+
+```math
+\tilde{\gamma}_i
+=
+\frac{\sum_j w_{ij}\gamma_j}{\sum_j w_{ij}},
+\qquad
+w_{ij}=\max\bigl(0,\,r-\lVert x_i-x_j\rVert\bigr),
+\qquad
+r=r_{\min}\min(\Delta x,\Delta y).
+```
+
+`--filter helmholtz` uses Lazarov & Sigmund instead (Neumann, Jacobi CG):
 
 ```math
 (-r^2\nabla^2+I)\tilde{\gamma}=\gamma.
 ```
+
+The same $`r`$ is the cone support and the Helmholtz length. Helmholtz
+has exponential tails; the cone is zero for $`\lVert x_i-x_j\rVert\ge r`$.
 
 Tanh / smoothed-Heaviside (Wang, Lazarov, Sigmund 2011). $`\beta`$ doubles
 $`1,2,4,\ldots,\beta_{\max}`$ (default $`32`$):
@@ -218,8 +235,9 @@ Neither is a PDE Dirichlet. Darcy does not pin ports.
 
 ## 6. Discrete adjoint
 
-Linear solves $`A(\bar{\gamma})x=b(\bar{\gamma})`$ (filter, Darcy, energy,
-Stokes momentum) use Krylov in forward mode. Reverse mode applies the
+Linear solves $`A(\bar{\gamma})x=b(\bar{\gamma})`$ (Helmholtz filter,
+Darcy, energy, Stokes momentum) use Krylov in forward mode. The cone
+filter is an explicit stencil; JAX differentiates it directly. Reverse mode applies the
 implicit-function theorem (`jax.lax.custom_linear_solve`), not an
 unrolled loop:
 
@@ -299,7 +317,8 @@ library defaults. Factories override only the columns in §8.2.
 | `p_in` | | $`1`$ | Darcy left-port $`p`$ |
 | `stokes_dp` | $`\Delta p`$ | $`20`$ | Stokes left-port $`p`$ |
 | `t_in`, `t_hot` | | $`0`$, $`1`$ | cold / hot Dirichlet $`T`$ |
-| `rmin` | `--rmin` | $`2.2`$ | filter radius in cells |
+| `rmin` | `--rmin` | $`2.2`$ | filter radius in cells (cone support / Helmholtz $`r`$) |
+| `filter_kind` | `--filter` | `cone` | `cone` or `helmholtz` |
 | `eta` | $`\eta`$ | $`0.5`$ | tanh threshold |
 | `port_frac` | `--port-frac` | $`0.5`$ | centered port height |
 | `hot_specs` | `--hot` | $`()`$ | Dirichlet $`T`$; kills uniform $`q`$ |
@@ -312,7 +331,7 @@ library defaults. Factories override only the columns in §8.2.
 | `uzawa_iters` | | $`80`$ | Stokes pressure warm start |
 | `stokes_kryl_iters` | | $`200`$ | Schur CG; $`0`$ skips |
 | `heat_iters` | | $`400`$ | energy BiCGSTAB |
-| `filter_iters` | | $`200`$ | Helmholtz CG |
+| `filter_iters` | | $`200`$ | Helmholtz CG (unused by cone) |
 | `u_in_max` | | $`1`$ | unused by the pressure-driven residuals |
 
 JSON / YAML may set any field plus `nx`, `ny`, `lx`, `ly`, `factory`,
@@ -383,6 +402,7 @@ CI: same pytest on Python 3.14 (`[cpu,dev]`; no gallery).
 | Advective energy | uniform $`\mathbf{u}`$ | order $`\gtrsim 1`$ |
 | Variable $`k`$ | discrete operator as source | residual $`\to 0`$ |
 | Helmholtz | $`\tilde{\gamma}=\cos\pi x\cos\pi y`$ (Neumann) | error $`\downarrow`$ under refinement; $`(-r^2\nabla^2+I)^{-1}(-r^2\nabla^2+I)`$ recovers $`\gamma`$ to Krylov tol |
+| Cone | spike / constant field | compact support $`d<r`$; constants unchanged |
 | Darcy | linear $`p`$, `port_frac=1` | small $`L^2`$ error |
 | Stokes | Poiseuille, full-height $`\Delta p`$, $`\alpha=0`$ | small $`L^2`$ error |
 | Adjoint | central FD on throughput and on `analyze` | matches discrete $`R\approx 0`$ |
@@ -397,7 +417,9 @@ run. Short-run numbers: `examples/reference.json`. Snapshots:
 
 - 2-D only. Stokes, not Navier–Stokes (no $`(\mathbf{u}\cdot\nabla)\mathbf{u}`$).
 - Darcy is potential flow: no no-slip, no inertia.
-- Helmholtz leaves a gray band of width $`\sim r`$ even at large $`\beta`$.
+- The cone support is $`r`$; Helmholtz (optional) has exponential tails
+  and a thicker gray band of width $`\sim r`$. Tanh still leaves a
+  gray interface of a few cells.
 - Brinkman solid leaks; first-order upwind adds diffusion at high $`\mathrm{Pe}`$.
 - Krylov caps: high-$`\beta`$ residuals can stay above $`10^{-2}`$.
 - Conduction + small sink chatters for $`\beta\gtrsim 16`$; return the

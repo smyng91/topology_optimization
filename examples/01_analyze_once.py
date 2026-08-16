@@ -14,7 +14,7 @@ What to notice
   (``energy_rms``, ``T_mean``, …).
 
 Parameters (on top of ``conduction_tree``: ``vol=0.30``, ``rmin=1.5``,
-8% bottom sink, ``symmetry=x``): mesh 32×32 (``--quick`` 16×16);
+cone filter, 8% bottom sink, ``symmetry=x``): mesh 32×32 (``--quick`` 16×16);
 ``heat_iters=300``, ``filter_iters=40``; ``analyze(..., beta=4)`` on
 γ = 1, 0, and 0.45. Shared flags: ``--quick``, ``--outdir``, ``--seed``.
 

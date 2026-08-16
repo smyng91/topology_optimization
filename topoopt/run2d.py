@@ -38,6 +38,12 @@ def build_parser():
     p.add_argument("--k-ratio", type=float, default=None)
     p.add_argument("--rmin", type=float, default=None)
     p.add_argument(
+        "--filter",
+        choices=("cone", "helmholtz"),
+        default=None,
+        help="Density filter: compact cone (default) or Helmholtz PDE",
+    )
+    p.add_argument(
         "--port-frac",
         type=float,
         default=None,
@@ -86,6 +92,8 @@ def _cli_overrides(args) -> dict:
         out["k_solid"] = args.k_ratio
     if args.rmin is not None:
         out["rmin"] = args.rmin
+    if args.filter is not None:
+        out["filter_kind"] = args.filter
     if args.port_frac is not None:
         out["port_frac"] = args.port_frac
     if args.hot:

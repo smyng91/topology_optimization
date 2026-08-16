@@ -1,8 +1,11 @@
-"""Helmholtz density filter with Neumann boundaries (Lazarov & Sigmund)."""
+"""Density filters: compact cone (default) and Helmholtz PDE."""
 
 from __future__ import annotations
 
+import math
+
 import jax.numpy as jnp
+from jax.scipy.signal import convolve
 
 from topoopt.config import ColdPlateParams
 from topoopt.solvers import implicit_spd_solve
@@ -27,8 +30,45 @@ def _laplacian_neumann(x, dxs):
 
 
 def filter_radius(params: ColdPlateParams) -> float:
-    """Physical Helmholtz radius: ``r = rmin * min(dx)``."""
+    """Physical filter radius: ``r = rmin * min(dx)``."""
     return params.rmin * min(params.dx)
+
+
+def _cone_half_widths(params: ColdPlateParams) -> tuple[int, int]:
+    """Inclusive cell offsets with positive hat weight (``d < r``)."""
+    r = filter_radius(params)
+    if r <= 0.0:
+        return (0, 0)
+    dx, dy = params.dx
+    rx = max(int(math.floor((r - 1e-15) / dx)), 0)
+    ry = max(int(math.floor((r - 1e-15) / dy)), 0)
+    return (rx, ry)
+
+
+def cone_kernel(params: ColdPlateParams):
+    """Linear hat ``max(0, r − d)`` on the compact stencil."""
+    rx, ry = _cone_half_widths(params)
+    dx, dy = params.dx
+    r = filter_radius(params)
+    ix = jnp.arange(-rx, rx + 1)
+    iy = jnp.arange(-ry, ry + 1)
+    dist = jnp.sqrt((ix[:, None] * dx) ** 2 + (iy[None, :] * dy) ** 2)
+    return jnp.maximum(r - dist, 0.0)
+
+
+def cone_filter(gamma_raw, params: ColdPlateParams):
+    """Normalized cone density filter (Bruns–Tortorelli / Bourdin).
+
+    ``γ̃_i = ∑_j w_{ij} γ_j / ∑_j w_{ij}`` with
+    ``w_{ij} = max(0, r − ‖x_i − x_j‖)``. The denominator is the
+    in-domain weight sum, so a uniform field is unchanged at walls.
+    """
+    if filter_radius(params) <= 0.0:
+        return gamma_raw
+    kernel = cone_kernel(params)
+    num = convolve(gamma_raw, kernel, mode="same", method="direct")
+    den = convolve(jnp.ones_like(gamma_raw), kernel, mode="same", method="direct")
+    return num / jnp.maximum(den, 1e-30)
 
 
 def helmholtz_operator(x, params: ColdPlateParams):
@@ -56,3 +96,13 @@ def helmholtz_filter(gamma_raw, params: ColdPlateParams):
         niter=params.filter_iters,
         tol=params.solver_tol,
     )
+
+
+def density_filter(gamma_raw, params: ColdPlateParams):
+    """Apply ``params.filter_kind`` (``cone`` or ``helmholtz``)."""
+    kind = params.filter_kind
+    if kind == "cone":
+        return cone_filter(gamma_raw, params)
+    if kind == "helmholtz":
+        return helmholtz_filter(gamma_raw, params)
+    raise ValueError(f"unknown filter_kind {kind!r}; expected 'cone' or 'helmholtz'")

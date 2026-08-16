@@ -9,7 +9,7 @@ import jax.numpy as jnp
 from topoopt.config import ColdPlateParams
 from topoopt.darcy import solve_darcy
 from topoopt.diagnostics import field_diagnostics
-from topoopt.filter import helmholtz_filter
+from topoopt.filter import density_filter
 from topoopt.flow2d import solve_flow
 from topoopt.grid import take_axis, zero_face_velocity
 from topoopt.heat import solve_energy, total_heat_transfer
@@ -17,7 +17,7 @@ from topoopt.interpolation import tanh_project
 
 
 def physical_density(gamma_raw, beta: float, params: ColdPlateParams):
-    filtered = helmholtz_filter(gamma_raw, params)
+    filtered = density_filter(gamma_raw, params)
     return tanh_project(filtered, beta, params.eta)
 
 

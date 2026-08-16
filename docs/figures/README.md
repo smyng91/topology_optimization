@@ -13,5 +13,6 @@ uneven from colormap interpolation.
 | `convection_darcy.png` | `convection_darcy` $`24\times 24`$ | $`12`$ it; flow $`160`$, heat $`220`$, filter $`50`$; `symmetry=y` | through-channel |
 | `custom_faces.png` | `custom_faces` $`24\times 24`$ | $`12`$ it; heat $`220`$, filter $`50`$; `symmetry=x` | conducting bridges |
 
-Physics defaults: [docs/model.md](../model.md) §8.2. Gallery output is
+Designs use the default cone filter. Physics defaults:
+[docs/model.md](../model.md) §8.2. Gallery output is
 gitignored under `outputs/`. CI numbers: `examples/reference.json`.
