@@ -13,9 +13,14 @@ BLOB = f"{REPO}/blob/main"
 WIKI_GIT = "git@github.com:smyng91/topology_optimization.wiki.git"
 
 LINK_MAP = (
+    ("[docs/model.md](docs/model.md)", "[Model](Model)"),
+    ("[docs/model.md](../docs/model.md)", "[Model](Model)"),
+    ("[examples/README.md](examples/README.md)", "[Examples](Examples)"),
+    ("[`docs/figures/`](docs/figures/)", "[Figures](Figures)"),
+    ("[`docs/figures/`](../docs/figures/)", "[Figures](Figures)"),
+    ("[docs/figures/README.md](docs/figures/README.md)", "[Figures](Figures)"),
     ("](docs/model.md)", "](Model)"),
     ("](../docs/model.md)", "](Model)"),
-    ("](docs/model.md §8)", "](Model#81-coldplateparams)"),
     ("](examples/README.md)", "](Examples)"),
     ("](../docs/figures/)", "](Figures)"),
     ("](docs/figures/)", "](Figures)"),
@@ -83,28 +88,38 @@ def build(dest: Path) -> None:
     )
 
 
+def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["git", *args], cwd=cwd, check=True, text=True)
+
+
+def _init_wiki(dest: Path) -> None:
+    dest.mkdir(parents=True, exist_ok=True)
+    _git(["init", "-b", "master"], dest)
+    _git(["remote", "add", "origin", WIKI_GIT], dest)
+
+
 def push(dest: Path) -> None:
     if dest.exists():
         shutil.rmtree(dest)
-    try:
-        subprocess.run(["git", "clone", WIKI_GIT, str(dest)], check=True)
-    except subprocess.CalledProcessError as exc:
-        raise SystemExit(
-            "Wiki clone failed. Enable Wikis on the GitHub repo "
-            "(Settings → Features → Wikis), open the Wiki tab once, then retry."
-        ) from exc
+    cloned = subprocess.run(["git", "clone", WIKI_GIT, str(dest)])
+    if cloned.returncode != 0:
+        print("wiki clone empty; initializing a new wiki repo")
+        _init_wiki(dest)
     build(dest)
-    subprocess.run(["git", "add", "-A"], cwd=dest, check=True)
+    _git(["add", "-A"], dest)
     staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=dest)
     if staged.returncode == 0:
         print("wiki already up to date")
         return
-    subprocess.run(
-        ["git", "commit", "-m", "Sync docs from main (GitHub-safe math)."],
-        cwd=dest,
-        check=True,
-    )
-    subprocess.run(["git", "push", "origin", "HEAD"], cwd=dest, check=True)
+    _git(["commit", "-m", "Sync docs from main (GitHub-safe math)."], dest)
+    pushed = subprocess.run(["git", "push", "-u", "origin", "HEAD"], cwd=dest)
+    if pushed.returncode != 0:
+        raise SystemExit(
+            "Wiki git repo does not exist yet. While signed in as the owner, "
+            "open https://github.com/smyng91/topology_optimization/wiki "
+            "and create the first page (title Home, any text), then rerun "
+            "this script with --push."
+        )
     print(f"pushed {WIKI_GIT}")
 
 
