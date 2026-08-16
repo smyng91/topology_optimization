@@ -20,6 +20,9 @@ venv/
 htmlcov/
 .tox/
 
+# Wiki publish scratch
+.wiki-build/
+
 # Run artifacts
 outputs/
 *.npz
