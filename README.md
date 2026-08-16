@@ -1,188 +1,166 @@
 # topoopt
 
-JAX package for density-based topology optimization of a 2-D heated square box.
-The design field `γ` is solid (`γ = 1`, conducting, impermeable) or fluid
-(`γ = 0`). Heat is a uniform volumetric source, or only on `--q-region`
-cells; `--hot` / `--cold` prescribe Dirichlet *T* (and turn off *uniform*
-`q` unless a `q` region is set). Sensitivities are discrete global adjoints.
+Density-based topology optimization of a 2-D heated box in JAX.
+Solid ($\gamma=1$) conducts and blocks flow; fluid ($\gamma=0$) is permeable.
+Sensitivities are discrete global adjoints. **2-D only.**
 
-The model (physics, discretization, adjoint, optimizer) is in
-[docs/model.md](docs/model.md).
+The discrete model is in [docs/model.md](docs/model.md). Named cases live in
+[`examples/problems.py`](examples/problems.py).
 
-## Research v0.4
+$$
+-\nabla\cdot(k\nabla T)+\mathrm{Pe}\,\mathbf{u}\cdot\nabla T=q,
+\qquad
+\mathrm{mean}(\bar\gamma)=v^\*,
+\qquad
+J=
+\begin{cases}
+-\mathrm{mean}(T) & \text{volume source on},\\
+Q_{\mathrm{hot}} & \text{Dirichlet }T\text{ only}.
+\end{cases}
+$$
 
-Each iteration logs energy residual RMS, `div_rms`, port mass error, and
-grayness (also stored in `analyze` aux). The move limit decays as
-`lr / sqrt(β)` and the run keeps the best-`J` design. A run writes
-`history.json`, `run.json`, `state_best.npz`, and `state_final.npz`.
-At `β_max` the loop stops if `J` has not improved for `stall_iters`
-(default 8). A blocked flow solve that runs `T` away **aborts** after
-writing the best-`J` checkpoint — it does not add a conduction sink.
+Flow is Stokes–Brinkman (default) or Darcy. Heat mode `conduction` /
+`convection` / `both` selects which terms are active — not the BCs.
 
-Symmetric problems stay symmetric. The historical breaker was
-asymmetric random init noise; `params.symmetry` (`x` and/or `y`)
-mirrors that noise and every accepted design. Named cases set this
-themselves (`conduction_tree` / `custom_faces` are left–right;
-centerline-port flow cases are top–bottom).
-
-Stokes is Uzawa-warm-started then corrected with CG on the pressure
-Schur complement so the discrete saddle-point residual is small. Flow
-modes have a single left-centerline inlet and a single right-centerline
-outlet — no extra inlets, outlets, or cold patches.
-`tests/test_mms.py` covers energy Poisson, advective energy, variable-`k`
-consistency, Helmholtz-filter order, Darcy linear pressure, and
-Stokes–Poiseuille. Snapshots live in [`docs/figures/`](docs/figures/).
-
-## Install
+## Quickstart
 
 Python 3.14+. From the repo root:
 
 ```bash
-python3.14 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[cpu,dev]"
+python3.14 -m venv .venv && source .venv/bin/activate
+pip install -e ".[cpu,dev]"          # [cuda] instead of [cpu] on NVIDIA
+MPLBACKEND=Agg python -m pytest tests -q
+python examples/02_conduction_tree.py --quick
 ```
 
-`[cpu]` pulls the CPU JAX extra; `[dev]` adds `pytest`. For an NVIDIA
-GPU use `[cuda]` (or `[gpu]`) **instead of** `[cpu]`. YAML configs need
-`[yaml]`. `jax_enable_x64` is turned on when the package is imported.
-Pinned versions from the development venv are in
+`[yaml]` adds PyYAML. `jax_enable_x64` is on at import. Pins:
 [`requirements-lock.txt`](requirements-lock.txt).
-
-## Problem configs
-
-Geometry, ports, Dirichlet *T* patches, and volumetric `q` regions are
-**not** hardcoded in the package. Named cases live in
-[`examples/problems.py`](examples/problems.py):
-
-```bash
-python -m topoopt 2d --config examples.problems:conduction_tree
-python -m topoopt 2d --config examples.problems:convection_darcy --nx 64 --ny 64
-python examples/gallery.py
-```
-
-`params2d()` builds a generic parameter object; BCs are whatever you pass.
-To add a new case, write a factory in `examples/problems.py` (or any
-`module:function` / `path.py:function`) or a JSON file:
-
-```bash
-python -m topoopt 2d --config examples/configs/conduction_tree.json
-python -m topoopt 2d --config examples.problems:conduction_tree --mesh-schedule 20,20,20:40,40,40
-```
-
-JSON may name a `factory` or list `nx` / `ny` / `hot_specs` / `cold_specs`
-/ `q_specs` / `symmetry` directly. YAML works if PyYAML is installed.
-Factory overrides (volume, `rmin`, ports, solver caps) are tabulated in
-[examples/README.md](examples/README.md) and [docs/model.md](docs/model.md) §8.2.
-
-## Tutorials
-
-Numbered scripts in [`examples/`](examples/) teach the API. From the repo root:
-
-```bash
-python examples/01_analyze_once.py              # analyze() only, no TO
-python examples/02_conduction_tree.py
-python examples/03_convection_darcy.py
-python examples/04_conjugate_stokes.py
-python examples/05_custom_regions.py           # Dirichlet T; --source for volumetric q
-python examples/06_mms_check.py
-python examples/run_all.py --quick              # coarse smoke of every tutorial
-```
-
-`--quick` uses a coarse mesh. Outputs go under `outputs/`. See
-[examples/README.md](examples/README.md) for the reading order.
-
-## Run
 
 ```bash
 python -m topoopt 2d --config examples.problems:conduction_tree --iters 80
-python -m topoopt 2d --config examples.problems:convection_darcy --outdir outputs/2d_convection
-python -m topoopt 2d --config examples.problems:conjugate_stokes --outdir outputs/2d_both
+python -m topoopt 2d --heat conduction --q-region box:0.3,0.7,0.70,1.0 --cold face:bottom:frac=0.08
+python -m topoopt 2d --heat conduction --hot face:top --cold face:bottom:frac=0.5
 ```
 
-`--heat` only selects which PDE terms are on (conduction / convection / both).
-Inlets, outlets, and Dirichlet patches come from `--config` or explicit
-`--hot` / `--cold` / `--q-region` / `--port-frac`.
+`--quick` on tutorials is a smoke mesh, not a publishable design. Outputs
+go under `outputs/` (gitignored).
 
-Default objective is `J = -mean(T)` when a volume source is on (the whole
-box, or `--q-region`). `--hot` without `--q-region` turns off uniform `q`
-and sets `J` to the conductive heat leaving those patches.
+## Variables
+
+| Symbol | Code | Meaning |
+|---|---|---|
+| $\gamma$ | `gamma_raw` | raw design in $[0,1]$ |
+| $\tilde\gamma$ | filtered | Helmholtz-filtered design |
+| $\bar\gamma$ | `phys` | tanh-projected density used in the PDEs |
+| $\beta,\eta$ | `beta`, `eta` | projection sharpness and threshold ($\eta=0.5$) |
+| $r=r_{\min}\min(\Delta x,\Delta y)$ | `rmin` | filter radius (`rmin` in cells) |
+| $k,k_f,k_s$ | `k`, `k_fluid`, `k_solid` | conductivity; $k=\mathrm{RAMP}(\bar\gamma;k_f,k_s,q_k)$ except convection ($k\equiv k_f$) |
+| $\alpha$ | Brinkman | solid drag (Borrvall–Petersson) |
+| $\kappa$ | Darcy | permeability $\mathrm{RAMP}(\bar\gamma;\kappa_{\max},\kappa_{\min},q_\kappa)$ |
+| $q$ | `q_vol` / `q_specs` | volumetric heat: uniform, or only on `--q-region` |
+| $\mathrm{Pe}$ | `pe` | Péclet; $0$ in conduction |
+| $T,\mathbf{u},p$ | `T`, `face_vel`, `p` | temperature, MAC velocity, pressure |
+| $v^\*$ | `vol_frac` | target $\mathrm{mean}(\bar\gamma)$ |
+| $J$ | `J` | $-\mathrm{mean}(T)$ if $q\neq 0$; else heat leaving `--hot` |
+| $\ell=\ell_0/\sqrt{\max(\beta,1)}$ | `lr` | move limit; `--lr` is $\ell_0$ at $\beta=1$ |
+| $\varepsilon$ | `div_eps` | Stokes continuity regularizer $\varepsilon p$ |
+
+`--hot` / `--cold` prescribe Dirichlet $T$ (and turn off *uniform* $q$).
+`--q-region` generates heat on a face or box; $T$ still floats. Specs:
+`face:bottom:frac=0.5`, `face:top:frac=0.4:center=0.3`,
+`box:xmin,xmax,ymin,ymax`. A face $q$ spec heats the adjacent cell layer.
+Overlays: crimson / sky-blue $=T$, orange $=q$.
+
+The library does **not** infer BCs from `--heat`. Geometry comes from
+`--config`, JSON, or the flags below. Full field list: [docs/model.md](docs/model.md) §8.
+
+| Flag | Field | Default |
+|---|---|---|
+| `--config` | factory or JSON/YAML | generic `params2d` box |
+| `--nx`, `--ny` | $n$ | $40,40$ |
+| `--heat` | `heat_mode` | `both` |
+| `--flow {stokes,darcy}` | `flow_model` | `stokes` |
+| `--vol` | $v^\*$ | $0.45$ |
+| `--pe` | $\mathrm{Pe}$ | $40$ |
+| `--q` | $q_{\mathrm{vol}}$ | $1$ |
+| `--k-ratio` | $k_s$ ($k_f=1$) | $100$ |
+| `--rmin` | $r_{\min}$ (cells) | $2.2$ |
+| `--port-frac` | port height | $0.5$ |
+| `--hot`, `--cold` | Dirichlet $T$ | empty |
+| `--q-region` | volumetric $q$ | empty (uniform $q$) |
+| `--symmetry {x,y,x,y}` | design mirror | from factory, else none |
+| `--iters` | design steps | $80$ |
+| `--lr` | $\ell_0$ | $0.2$ |
+| `--beta-max` | $\beta_{\max}$ | $32$ |
+| `--mesh-schedule` | coarse $\to$ fine | unset |
+| `--seed`, `--outdir` | init, artifacts | $0$, `outputs/2d` |
+
+Other fields (`q_k`, `alpha_max`, `stokes_dp`, `heat_iters`, …) are set
+on the factory, in JSON, or by `params2d(..., key=value)`.
+
+## Tutorials
+
+From the repo root after install. Details: [examples/README.md](examples/README.md).
 
 ```bash
-python -m topoopt 2d --heat conduction --hot face:top --cold face:bottom:frac=0.5
-python -m topoopt 2d --heat conduction --q-region box:0.3,0.7,0.70,1.0 --cold face:bottom:frac=0.08
-python -m topoopt 2d --config examples.problems:localized_source
-python -m topoopt verify
-python -m topoopt examples
+python examples/01_analyze_once.py              # analyze() only
+python examples/02_conduction_tree.py           # volume-to-point tree
+python examples/03_convection_darcy.py          # Darcy ports
+python examples/04_conjugate_stokes.py          # Stokes–Brinkman
+python examples/05_custom_regions.py            # Dirichlet T; --source for q
+python examples/06_mms_check.py                 # manufactured solutions
+python examples/run_all.py --quick
 ```
 
-`--hot` / `--cold` fix *T* on a face or box. `--q-region` uses the same
-spec language but generates heat there (*T* still floats). A face `q`
-spec heats the adjacent cell layer. Orange plot overlays are `q`;
-crimson / sky-blue are Dirichlet *T*.
+| Script | Point |
+|---|---|
+| 01 | fields and diagnostics, no optimizer |
+| 02 | small sink $\Rightarrow$ tree; $v^\*=0.30$ |
+| 03 | one left-centerline inlet / right-centerline outlet |
+| 04 | pressure-driven Stokes, channel seed, port pin |
+| 05 | `--hot`/`--cold` vs `--q-region` |
+| 06 | discrete-operator MMS |
 
-Every `ColdPlateParams` field and optimizer kwarg is listed in
-[docs/model.md](docs/model.md) §8. Tutorial / gallery numbers are in
-[examples/README.md](examples/README.md).
+```bash
+python -m topoopt 2d --config examples.problems:conduction_tree
+python -m topoopt 2d --config examples/configs/localized_source.json
+python examples/gallery.py                      # 80×80 sweep, not a tutorial
+python examples/publish_figures.py              # docs/figures/ snapshots
+```
 
-| Flag | Writes | Library default if omitted |
-|---|---|---|
-| `--config` | factory or JSON/YAML | generic `params2d` box (no patches) |
-| `--nx`, `--ny` | `n` | 40, 40 |
-| `--heat` | `heat_mode` | `both` (or the factory) |
-| `--flow {stokes,darcy}` | `flow_model` | `stokes` |
-| `--vol` | `vol_frac` | 0.45 |
-| `--pe` | `pe` | 40 |
-| `--q` | `q_vol` | 1 |
-| `--k-ratio` | `k_solid` (`k_fluid` stays 1) | 100 |
-| `--rmin` | `rmin` (cells) | 2.2 |
-| `--port-frac` | `port_frac` | 0.5 |
-| `--hot`, `--cold` | `hot_specs` / `cold_specs` (Dirichlet *T*) | empty |
-| `--q-region` | `q_specs` (volumetric *q*; *T* floats) | empty (uniform `q`) |
-| `--symmetry {x,y,x,y}` | `symmetry` | from the factory, else none |
-| `--iters` | design steps | 80 |
-| `--lr` | move at `β=1` | 0.2 (`ℓ = lr/√β`) |
-| `--beta-max` | projection ceiling | 32 |
-| `--mesh-schedule` | `optimize_hierarchy` | unset |
-| `--seed` | init noise | 0 |
-| `--outdir` | artifacts | `outputs/2d` |
+Returned design is the best-$J$ iterate at the **highest $\beta$** that
+ran (not the global max $J$ across continuation). Flow modes have no
+extra cold patch; a sealed channel aborts.
 
-Fields with no CLI flag (`q_k`, `alpha_max`, `stokes_dp`, `heat_iters`,
-…) are set on the factory, in JSON, or by `params2d(..., key=value)`.
-
-## Stokes notes
-
-Stokes is **pressure-driven** (`stokes_dp` on the left port, `p = 0` on the
-right). After each volume projection the optimizer pins a one-cell fluid
-layer on the port *design variables* (`keep_ports_open`) — that is a design
-projection, not a Dirichlet condition in the residual. A mid-height channel
-seed is required: from a uniform field the local step opens an inlet cavity
-and dams the outlet. Do not remove the seed or the port pin if you want a
-through-channel.
-
-The forward Stokes solve is an Uzawa warm start plus CG on the pressure
-Schur complement (`stokes_kryl_iters`, default 200). The adjoint is the
-residual discrete adjoint, not an unrolled Uzawa loop.
-
-## Diagnostics
-
-Every iteration prints `energy_rms`, `div_rms`, `mass_err`, and `gray`.
-A warning is issued if `energy_rms > 1e-2` or, when flow is on,
-`mass_err > 0.15`. If `T` is non-finite or `T_max > 1e3` (or flow is
-blocked with a large energy residual and `T_max > 50`), the run
-**aborts** after writing the best-`J` design. Flow modes have no
-conduction sink — do not add one to hide a sealed channel.
-
-## Tests
+## Validation
 
 ```bash
 MPLBACKEND=Agg python -m pytest tests -q
+python -m topoopt verify
+python examples/06_mms_check.py
 ```
 
-This is the same command GitHub Actions runs (`pip install -e ".[cpu,dev]"`
-on Python 3.14; the gallery is not run in CI). The suite covers
-interpolation, Darcy/Stokes residuals, Stokes adjoint FD on throughput
-and on the full `analyze` path, manufactured solutions and observed
-order (`tests/test_mms.py`), short conduction / Darcy / custom-faces
-optimizations with symmetry checks, JSON configs, and the physics
-checks in `tests/test_physics.py`.
+CI is the same pytest command on Python 3.14 (`[cpu,dev]`; no gallery).
+
+| Check | What |
+|---|---|
+| Energy Poisson | $T=\sin\pi x\sin\pi y$, order $\approx 2$ |
+| Advective energy | uniform $\mathbf{u}$, order $\gtrsim 1$ |
+| Variable $k$ | discrete operator as manufactured source |
+| Helmholtz | Neumann cosine; inverse recovers $\gamma$ to Krylov tol |
+| Darcy | linear $p$ on a full-height port |
+| Stokes | Poiseuille on a full-height $\Delta p$ channel |
+| Adjoint | central FD on throughput and on `analyze` |
+| Physics | solid cooler than fluid; localized $q$; Dirichlet $T$ |
+
+Snapshots: [`docs/figures/`](docs/figures/). Short-run numbers:
+[`examples/reference.json`](examples/reference.json).
+
+## Stokes
+
+Pressure-driven: $p=\Delta p$ (`stokes_dp`, default $20$) on the left
+port, $p=0$ on the right. Forward: Uzawa warm start + CG on the
+pressure Schur complement. Adjoint: residual discrete adjoint, not
+unrolled Uzawa. A one-cell fluid pin on port *design* cells
+(`keep_ports_open`) and a mid-height channel seed are required; they
+are not PDE Dirichlet data.
