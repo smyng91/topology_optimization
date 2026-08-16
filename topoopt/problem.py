@@ -36,8 +36,9 @@ def solve_fields(phys, params: ColdPlateParams):
 def analyze(gamma_raw, beta: float, params: ColdPlateParams) -> tuple[Any, dict[str, Any]]:
     """Return the figure of merit J and a dict of fields.
 
-    With a uniform volume source, J = −mean(T) (cooler is better). With
-    Dirichlet heat-source patches, J is the heat leaving those patches.
+    With a volume source (uniform or ``q_specs``), J = −mean(T). With
+    Dirichlet heat-source patches and no volume source, J is the heat
+    leaving those patches.
     """
     phys = physical_density(gamma_raw, beta, params)
     face_vel, pressure, temperature = solve_fields(phys, params)

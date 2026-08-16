@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from examples.problems import TREE_SINK, conduction_tree, conjugate_darcy, conjugate_stokes, convection_darcy
 from topoopt.config import params2d
@@ -19,13 +20,15 @@ def test_parse_region_specs():
     assert resolve_axis("bottom", 2) == (1, 0)
     assert resolve_axis("left", 2) == (0, 0)
     assert resolve_axis("top", 2) == (1, -1)
-    hot, cold = specs_from_cli(
+    hot, cold, q = specs_from_cli(
         ["face:bottom:frac=0.4", "box:0.1,0.3,0.0,0.2"],
         ["face:left", "face:top:frac=0.3"],
+        ["box:0.3,0.7,0.7,1.0"],
     )
     assert hot == ("face:bottom:frac=0.4", "box:0.1,0.3,0.0,0.2")
     assert cold == ("face:left", "face:top:frac=0.3")
-    assert specs_from_cli(None, None) == ((), ())
+    assert q == ("box:0.3,0.7,0.7,1.0",)
+    assert specs_from_cli(None, None) == ((), (), ())
 
 
 def test_conduction_volume_source_solid_cools_better():
@@ -205,6 +208,70 @@ def test_conduction_energy_residual_small():
     faces = zero_face_velocity(params)
     temp = solve_energy(gamma, faces, params)
     k = conductivity(gamma, params)
-    q = params.q_vol if params.uses_volume_source else 0.0
+    from topoopt.regions import volume_source_field
+
+    q = volume_source_field(params)
     res = energy_operator(temp, k, faces, params, params.t_in, params.t_hot, q)
     assert float(jnp.sqrt(jnp.mean(res**2))) < 1e-3
+
+
+def test_localized_volume_source_heats_the_box():
+    params = params2d(
+        nx=20,
+        ny=20,
+        heat_mode="conduction",
+        q_vol=1.0,
+        q_specs=("box:0.25,0.75,0.70,1.0",),
+        cold_specs=("face:bottom:frac=0.5",),
+        heat_iters=400,
+        filter_iters=40,
+    )
+    assert params.uses_volume_source
+    j, aux = analyze(jnp.ones(params.n), 4.0, params)
+    temp = np.asarray(aux["T"])
+    assert float(j) == pytest.approx(-float(temp.mean()))
+    assert temp[5:15, 14:20].mean() > temp[5:15, 0:6].mean()
+    from topoopt.regions import source_cell_mask, volume_source_field
+
+    mask = np.asarray(source_cell_mask(params))
+    q = np.asarray(volume_source_field(params))
+    assert mask.any() and not mask.all()
+    assert float(q[mask].min()) == pytest.approx(1.0)
+    assert float(q[~mask].max()) == pytest.approx(0.0)
+
+
+def test_q_region_and_dirichlet_T_together():
+    params = params2d(
+        nx=16,
+        ny=16,
+        heat_mode="conduction",
+        q_vol=1.0,
+        q_specs=("box:0.25,0.75,0.55,0.85",),
+        hot_specs=("face:top:frac=0.5",),
+        cold_specs=("face:bottom:frac=0.5",),
+        heat_iters=400,
+        filter_iters=40,
+    )
+    assert params.uses_volume_source
+    j, aux = analyze(jnp.ones(params.n), 4.0, params)
+    temp = np.asarray(aux["T"])
+    assert float(j) == pytest.approx(-float(temp.mean()))
+    assert temp[:, -1].mean() > 0.7
+    assert temp[:, 0].mean() < 0.3
+
+
+def test_hot_specs_still_disable_uniform_q():
+    params = params2d(
+        nx=12,
+        ny=12,
+        heat_mode="conduction",
+        q_vol=1.0,
+        hot_specs=("face:top",),
+        cold_specs=("face:bottom",),
+        heat_iters=200,
+        filter_iters=20,
+    )
+    assert not params.uses_volume_source
+    from topoopt.regions import volume_source_field
+
+    assert float(volume_source_field(params)) == 0.0

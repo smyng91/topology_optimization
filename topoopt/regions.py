@@ -1,14 +1,16 @@
 """User-defined heat-source and cold-plate regions (faces or volumetric boxes).
 
-Spec strings (repeatable via ``--hot`` / ``--cold``):
+Spec strings (repeatable via ``--hot`` / ``--cold`` / ``--q-region``):
 
 - ``face:bottom`` / ``face:left`` / ``face:right`` / ``face:top``
 - ``face:bottom:frac=0.5`` — centered patch
 - ``face:bottom:frac=0.4:center=0.3`` — off-center patch
 - ``box:xmin,xmax,ymin,ymax`` — volumetric domain
 
-The package does not pick default patches. Research cases set
-``hot_specs`` / ``cold_specs`` in ``examples/problems.py``.
+``hot_specs`` / ``cold_specs`` prescribe Dirichlet *T*. ``q_specs``
+marks cells that receive the volumetric source ``q_vol`` (*T* still
+floats). The package does not pick default patches. Research cases set
+these fields in ``examples/problems.py``.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from topoopt.config import ColdPlateParams
-from topoopt.grid import add_axis, harmonic_faces, line_mask, take_axis
+from topoopt.grid import add_axis, harmonic_faces, line_mask, set_axis, take_axis
 
 FACE_AXES = {
     "left": (0, 0),
@@ -127,6 +129,42 @@ def face_dirichlets(params: ColdPlateParams) -> list[FacePatch]:
     return patches
 
 
+def spec_cell_mask(params: ColdPlateParams, spec: str):
+    """Cells covered by one ``face:…`` or ``box:…`` spec.
+
+    A face spec marks the single cell layer adjacent to that patch.
+    """
+    parsed = parse_spec(spec)
+    if parsed[0] == "box":
+        return box_cell_mask(params, parsed[1])
+    _, side, fracs, centers = parsed
+    axis, lohi = resolve_axis(side, params.dim)
+    line = face_patch_mask(params, axis, fracs, centers)
+    sl = 0 if lohi == 0 else -1
+    return set_axis(jnp.zeros(params.n, dtype=bool), axis, sl, line)
+
+
+def source_cell_mask(params: ColdPlateParams):
+    """Union of ``q_specs``. Empty when no source regions are set."""
+    mask = jnp.zeros(params.n, dtype=bool)
+    for spec in params.q_specs:
+        mask = mask | spec_cell_mask(params, spec)
+    return mask
+
+
+def volume_source_field(params: ColdPlateParams):
+    """Cell-wise volumetric heat *q*.
+
+    Scalar ``q_vol`` when the source is uniform; ``q_vol`` on ``q_specs``
+    and 0 elsewhere when regions are set; 0 when volume heating is off.
+    """
+    if not params.uses_volume_source:
+        return jnp.asarray(0.0)
+    if not params.q_specs:
+        return jnp.asarray(params.q_vol)
+    return params.q_vol * source_cell_mask(params).astype(jnp.float64)
+
+
 def cell_dirichlet_masks(params: ColdPlateParams):
     hot = jnp.zeros(params.n, dtype=bool)
     cold = jnp.zeros(params.n, dtype=bool)
@@ -215,6 +253,25 @@ def overlay_segments_2d(params: ColdPlateParams):
             active = ys[mask]
             if active.size:
                 segs.append((x, float(active[0] - 0.5 * params.dx[1]), x, float(active[-1] + 0.5 * params.dx[1]), colors[patch.role]))
+    for spec in params.q_specs:
+        parsed = parse_spec(spec)
+        if parsed[0] != "face":
+            continue
+        _, side, fracs, centers = parsed
+        axis, lohi = resolve_axis(side, params.dim)
+        mask = np.asarray(face_patch_mask(params, axis, fracs, centers))
+        if axis == 1:
+            y = 0.0 if lohi == 0 else ly
+            xs = (np.arange(params.n[0]) + 0.5) * params.dx[0]
+            active = xs[mask]
+            if active.size:
+                segs.append((float(active[0] - 0.5 * params.dx[0]), y, float(active[-1] + 0.5 * params.dx[0]), y, "darkorange"))
+        elif axis == 0:
+            x = 0.0 if lohi == 0 else lx
+            ys = (np.arange(params.n[1]) + 0.5) * params.dx[1]
+            active = ys[mask]
+            if active.size:
+                segs.append((x, float(active[0] - 0.5 * params.dx[1]), x, float(active[-1] + 0.5 * params.dx[1]), "darkorange"))
     return segs
 
 
@@ -227,6 +284,11 @@ def overlay_boxes_2d(params: ColdPlateParams):
             if parsed[0] == "box":
                 b = parsed[1]
                 boxes.append((b[0], b[1], b[2], b[3], colors[role]))
+    for spec in params.q_specs:
+        parsed = parse_spec(spec)
+        if parsed[0] == "box":
+            b = parsed[1]
+            boxes.append((b[0], b[1], b[2], b[3], "darkorange"))
     return boxes
 
 
@@ -237,7 +299,7 @@ def add_region_arguments(parser) -> None:
         default=None,
         metavar="SPEC",
         help=(
-            "Dirichlet heat-source region (disables the uniform volume source). "
+            "Dirichlet T patch (turns off *uniform* q unless --q-region is set). "
             "Repeatable. Examples: face:top, box:0.25,0.75,0,0.15"
         ),
     )
@@ -251,12 +313,23 @@ def add_region_arguments(parser) -> None:
             "Examples: face:left, face:top:frac=0.4, box:0.8,1.0,0.3,0.7"
         ),
     )
+    parser.add_argument(
+        "--q-region",
+        action="append",
+        default=None,
+        metavar="SPEC",
+        help=(
+            "Volumetric heat-source region (q=q_vol, T is free). Repeatable. "
+            "Same spec language as --hot. Example: box:0.3,0.7,0.7,1.0"
+        ),
+    )
 
 
-def specs_from_cli(hot, cold) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Parse CLI ``--hot`` / ``--cold`` lists. Missing lists become empty."""
+def specs_from_cli(hot, cold, source=None) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Parse CLI ``--hot`` / ``--cold`` / ``--q-region`` lists."""
     hot_specs = tuple(hot) if hot else ()
     cold_specs = tuple(cold) if cold else ()
-    for spec in (*hot_specs, *cold_specs):
+    q_specs = tuple(source) if source else ()
+    for spec in (*hot_specs, *cold_specs, *q_specs):
         parse_spec(spec)
-    return hot_specs, cold_specs
+    return hot_specs, cold_specs, q_specs

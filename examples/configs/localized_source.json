@@ -1,0 +1,6 @@
+{
+  "factory": "examples.problems:localized_source",
+  "nx": 32,
+  "ny": 32,
+  "comment": "Volumetric q in a top-center box; T is free there. Bottom sink."
+}

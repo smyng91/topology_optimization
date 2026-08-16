@@ -1,7 +1,8 @@
 # Tutorials and problem configs
 
-Named research cases (geometry, ports, hot/cold patches, and the
-solver caps those cases need) are defined in [`problems.py`](problems.py).
+Named research cases (geometry, ports, Dirichlet *T* patches,
+volumetric `q` regions, and the solver caps those cases need) are
+defined in [`problems.py`](problems.py).
 The `topoopt` package does not pick BCs from the heat mode. Library
 defaults for every `ColdPlateParams` field are in
 [docs/model.md](../docs/model.md) §8.
@@ -25,7 +26,7 @@ symmetric and leaves that field empty.
 Each factory is `name(nx=40, ny=40, **kwargs)`. Extra keywords override
 the case defaults (mesh, `vol_frac`, solver iters, …). Fields not listed
 keep the `params2d` library default (`L=(1,1)`, `q_vol=1` unless `--hot`
-/ `hot_specs` is set, `k_fluid=1`, `k_solid=100`, `eta=0.5`,
+/ `hot_specs` is set without `q_specs`, `k_fluid=1`, `k_solid=100`, `eta=0.5`,
 `solver_tol=1e-7`, …).
 
 | Factory | heat | flow | v* | rmin | Pe | ports / patches | symmetry | J | Solver caps |
@@ -36,9 +37,11 @@ keep the `params2d` library default (`L=(1,1)`, `q_vol=1` unless `--hot`
 | `conjugate_stokes` | both | Stokes | 0.45 | 2.0 | 40 | same ports; `stokes_dp=20` | y | −mean(T) | flow 80, Uzawa 80, Schur 200, heat 320, filter 120 |
 | `custom_faces` | conduction | none | 0.40 | 2.0 | 0 | hot `face:top:frac=0.5`, cold `face:bottom:frac=0.5`; `q=0` | x | Q_hot | heat 400, filter 200 |
 | `custom_boxes` | conduction | none | 0.40 | 2.0 | 0 | hot `box:0.2,0.8,0.0,0.18`; cold `box:0.0,0.18,0.25,0.75` and `face:left`; `q=0` | none | Q_hot | heat 400, filter 200 |
+| `localized_source` | conduction | none | 0.30 | 1.5 | 0 | `q_specs=box:0.3,0.7,0.70,1.0`; cold `face:bottom:frac=0.08`; no Dirichlet hot | x | −mean(T) | heat 400, filter 200 |
 
-`CENTERLINE_PORT = 0.5` and `TREE_SINK = ("face:bottom:frac=0.08",)` are
-the shared constants. Flow factories do **not** add a conduction sink.
+`CENTERLINE_PORT = 0.5`, `TREE_SINK = ("face:bottom:frac=0.08",)`, and
+`SOURCE_BOX = ("box:0.3,0.7,0.70,1.0",)` are the shared constants. Flow
+factories do **not** add a conduction sink.
 
 ## JSON / YAML configs
 
@@ -51,11 +54,13 @@ the shared constants. Flow factories do **not** add a conduction sink.
 | `nx`, `ny` | Mesh; used when `n` is omitted |
 | `lx`, `ly` | Box size; used when `L` is omitted |
 | `n`, `L` | `(nx, ny)` and `(Lx, Ly)` lists |
-| `hot_specs`, `cold_specs`, `symmetry` | Lists of strings (`["x"]`, `["face:bottom:frac=0.08"]`) |
+| `hot_specs`, `cold_specs`, `q_specs`, `symmetry` | Lists of strings (`["x"]`, `["face:bottom:frac=0.08"]`, `["box:0.3,0.7,0.7,1.0"]`) |
 | `comment` | Ignored |
 
 Examples: [`configs/conduction_tree.json`](configs/conduction_tree.json)
-(factory + mesh) and [`configs/standalone_box.json`](configs/standalone_box.json)
+(factory + mesh), [`configs/localized_source.json`](configs/localized_source.json)
+(volumetric `q` box), and
+[`configs/standalone_box.json`](configs/standalone_box.json)
 (no factory; a full conduction box).
 
 ## Tutorial scripts
@@ -85,7 +90,7 @@ aux keys: `V`, `T_mean`, `T_max`, `speed_max`, `u_in`, `u_out`,
 | [`02_conduction_tree.py`](02_conduction_tree.py) | `conduction_tree` | 100×100, 100 iters, `β_max=16`, `lr=0.2` | 16×16, 8 iters, `β_max=8` | `heat_iters=300`, `filter_iters=80`; `--wide-sink` → `frac=0.5` | why the sink is 8% and `vol=0.30` |
 | [`03_convection_darcy.py`](03_convection_darcy.py) | `convection_darcy` | 32×32, 50 iters, `β_max=16`, `lr=0.2` | 16×16, 8 iters, `β_max=8` | `flow_iters=200`, `heat_iters=300`, `filter_iters=60` | centerline Darcy ports, channel seed |
 | [`04_conjugate_stokes.py`](04_conjugate_stokes.py) | `conjugate_stokes` | 24×24, 40 iters, `β_max=16`, `lr=0.16` | 16×16, 6 iters, `β_max=8` | `uzawa_iters=40`, `heat_iters=280`, `filter_iters=60` (Schur CG stays 200) | Stokes seed + port pin |
-| [`05_custom_regions.py`](05_custom_regions.py) | `custom_faces` or `--boxes` → `custom_boxes` | 32×32, 50 iters, `β_max=16`, `lr=0.2` | 16×16, 8 iters, `β_max=8` | `heat_iters=300`, `filter_iters=60` | `J = Q_hot` |
+| [`05_custom_regions.py`](05_custom_regions.py) | `custom_faces`; `--boxes` → `custom_boxes`; `--source` → `localized_source` | 32×32, 50 iters, `β_max=16`, `lr=0.2` | 16×16, 8 iters, `β_max=8` | `heat_iters=300`, `filter_iters=60` | Dirichlet *T* vs volumetric `q` |
 | [`06_mms_check.py`](06_mms_check.py) | `params2d` (not a named factory) | energy n=8 and 16; Helmholtz n=16 `rmin=2`; Darcy 16×16 `port_frac=1`; Stokes n=12 `port_frac=1`, `div_eps=1e-12` | skips Stokes | energy `heat_iters=800`; Darcy `flow_iters=400`; Stokes Uzawa 40 / Schur 200 | discrete-operator checks |
 
 [`run_all.py`](run_all.py) runs 01–06 in order. `--quick` is forwarded.
@@ -123,7 +128,7 @@ Outputs go under `outputs/` (gitignored).
 2. **02** — why the sink is 8% and `vol = 0.30`.
 3. **03** — one left-centerline inlet / right-centerline outlet, channel seed, `J = -mean(T)`.
 4. **04** — Stokes notes (`stokes_dp`, Schur CG, port pin).
-5. **05** — Dirichlet patches change both the BCs and the objective.
+5. **05** — Dirichlet *T* patches vs a volumetric `q` subdomain.
 6. **06** — how we know the discrete operators are consistent.
 
 The model write-up is [docs/model.md](../docs/model.md).

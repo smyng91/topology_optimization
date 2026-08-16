@@ -13,12 +13,13 @@ from topoopt.flow2d import stokes_residual
 from topoopt.grid import cell_divergence, port_mask
 from topoopt.heat import energy_operator
 from topoopt.interpolation import conductivity
+from topoopt.regions import volume_source_field
 
 
 def energy_residual_rms(phys, temperature, face_vel, params: ColdPlateParams):
     """RMS of the discrete energy residual at the solved temperature."""
     k = conductivity(phys, params)
-    q = params.q_vol if params.uses_volume_source else 0.0
+    q = volume_source_field(params)
     res = energy_operator(temperature, k, face_vel, params, params.t_in, params.t_hot, q)
     return jnp.sqrt(jnp.mean(res**2))
 

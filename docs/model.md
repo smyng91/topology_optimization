@@ -17,17 +17,18 @@ are active.
 
 | Mode | Flow | Conductivity | Thermal BCs (defaults) | Source |
 |---|---|---|---|---|
-| `conduction` | off, \(\mathrm{Pe}=0\) | \(k(\gamma)\) | centered 8% of the bottom wall at \(T=0\); other walls adiabatic | uniform \(q\) |
-| `convection` | on | uniform \(k_\mathrm{fluid}\) | one left-centerline inlet, one right-centerline outlet; inlet \(T=0\) by advection; no other inlets, outlets, or cold patches | uniform \(q\) |
-| `both` | on | \(k(\gamma)\) | same single inlet / outlet as convection | uniform \(q\) |
+| `conduction` | off, \(\mathrm{Pe}=0\) | \(k(\gamma)\) | centered 8% of the bottom wall at \(T=0\); other walls adiabatic | uniform \(q\), or \(q\) on `q_specs` |
+| `convection` | on | uniform \(k_\mathrm{fluid}\) | one left-centerline inlet, one right-centerline outlet; inlet \(T=0\) by advection; no other inlets, outlets, or cold patches | uniform \(q\), or \(q\) on `q_specs` |
+| `both` | on | \(k(\gamma)\) | same single inlet / outlet as convection | uniform \(q\), or \(q\) on `q_specs` |
 
 These BCs are **example configurations**, not library defaults. They are
 defined in `examples/problems.py` and loaded with
 `--config examples.problems:<name>`. The solver accepts any
-`hot_specs` / `cold_specs` / `port_frac`. Setting `--hot` turns the
-volume source off. Factory numbers and every `ColdPlateParams` field
-are in §8; tutorial meshes and `--quick` settings are in
-`examples/README.md`.
+`hot_specs` / `cold_specs` / `q_specs` / `port_frac`. Setting `--hot`
+turns *uniform* \(q\) off; `--q-region` / `q_specs` keeps a volumetric
+source on those cells (and can be combined with Dirichlet \(T\)).
+Factory numbers and every `ColdPlateParams` field are in §8; tutorial
+meshes and `--quick` settings are in `examples/README.md`.
 
 **Notation.** \(\gamma\) is the raw design. \(\tilde\gamma\) is the Helmholtz-filtered
 field. \(\bar\gamma\) is the projected physical density used in the PDEs.
@@ -102,8 +103,11 @@ scaling so the Laplacian coefficient is \(1\).
 - `convection`: \(\mathrm{Pe}>0\) (default \(40\)), \(k=k_f\).
 - `both`: \(\mathrm{Pe}>0\), \(k=k(\bar\gamma)\).
 
-Default source: \(q=q_{\mathrm{vol}}=1\) everywhere. If `--hot` is set,
-\(q=0\) and those patches are Dirichlet sources at \(T_{\mathrm{hot}}=1\).
+Default source: \(q=q_{\mathrm{vol}}=1\) everywhere. `--q-region` /
+`q_specs` restricts \(q\) to those cells (\(T\) still floats). `--hot`
+prescribes Dirichlet \(T=T_{\mathrm{hot}}\) and turns *uniform* \(q\)
+off; with both `--hot` and `--q-region`, the patches fix \(T\) and the
+source region still generates heat.
 
 Advection is the **incompressible** form \(\mathbf{u}\cdot\nabla T\), not
 the conservative flux \(\nabla\cdot(\mathbf{u}T)\). The two agree when
@@ -125,9 +129,10 @@ approximately divergence-free.
   or cold Dirichlet patches — remaining walls are adiabatic for
   diffusion and no-slip / impermeable for flow. A blocked design can
   therefore run \(T\) away.
-- Optional `--hot` / `--cold` faces or boxes override the defaults.
-  Specs: `face:bottom:frac=0.5`, `face:top:frac=0.4:center=0.3`,
-  `box:xmin,xmax,ymin,ymax`.
+- Optional `--hot` / `--cold` faces or boxes prescribe Dirichlet \(T\).
+  `--q-region` marks cells that generate heat (\(T\) floats). Same spec
+  language: `face:bottom:frac=0.5`, `face:top:frac=0.4:center=0.3`,
+  `box:xmin,xmax,ymin,ymax`. A face `q` spec heats the adjacent cell layer.
 
 ### 3.2 Stokes–Brinkman (default flow)
 
@@ -265,27 +270,30 @@ on throughput and on the full `analyze` path (filter + energy).
 
 ### 5.1 Objective
 
-With the default uniform source, the heat that eventually leaves the box
-is \(\int_\Omega q\,\mathrm{d}V\), independent of \(\gamma\). The design
-cannot change how much heat is rejected, only how hot the box runs.
-The figure of merit is therefore
+When a volumetric source is on (uniform \(q\), or \(q=q_{\mathrm{vol}}\)
+restricted to `q_specs`), the heat generated in that region is
+\(\int q\,\mathrm{d}V\), independent of \(\gamma\). The design cannot
+change how much heat is produced, only how hot the box runs. The
+figure of merit is therefore
 
 \[
 J=-\frac{1}{|\Omega|}\int_\Omega T\,\mathrm{d}V
 =-\mathrm{mean}(T).
 \]
 
-Maximizing \(J\) minimizes mean temperature.
+Maximizing \(J\) minimizes mean temperature. `--hot` without
+`q_specs` turns *uniform* \(q\) off. With both `--hot` and
+`--q-region`, Dirichlet patches fix \(T\) and the source cells still
+generate heat; \(J\) stays \(-\mathrm{mean}(T)\).
 
-If `--hot` is set, \(q=0\) and
+If `--hot` is set and there is no volume source,
 
 \[
 J=Q_{\mathrm{hot}},
 \]
 
 the conductive heat leaving the Dirichlet heat-source faces and/or
-source boxes into the rest of the domain (Fourier flux on those
-interfaces).
+boxes into the rest of the domain (Fourier flux on those interfaces).
 
 The optimizer minimizes \(\mathcal{L}=-J\).
 
@@ -435,7 +443,7 @@ tabulated in `examples/README.md`.
 | `flow_model` | `--flow` | `stokes` | `stokes` or `darcy`; ignored in conduction |
 | `vol_frac` | `--vol` \(v^\*\) | \(0.45\) | Target \(\mathrm{mean}(\bar\gamma)\) |
 | `pe` | `--pe` | \(40\) | Péclet; forced to \(0\) in conduction |
-| `q_vol` | `--q` | \(1\) | Uniform volumetric source; off if `hot_specs` is set |
+| `q_vol` | `--q` | \(1\) | Volumetric source strength. Uniform if `q_specs` is empty and `hot_specs` is empty; on `q_specs` only otherwise. Off if \(q=0\), or if `hot_specs` is set and `q_specs` is empty |
 | `k_fluid` | | \(1\) | Fluid conductivity |
 | `k_solid` | `--k-ratio` | \(100\) | Solid conductivity (`--k-ratio` writes this field; \(k_f\) stays \(1\)) |
 | `q_k` | | \(1\) | RAMP sharpness for \(k\) |
@@ -452,8 +460,9 @@ tabulated in `examples/README.md`.
 | `rmin` | `--rmin` | \(2.2\) | Helmholtz radius in **cells**; \(r=r_{\min}\min(\Delta x,\Delta y)\) |
 | `eta` | | \(0.5\) | Tanh-projection threshold |
 | `port_frac` | `--port-frac` | \(0.5\) | Centered height of both vertical ports |
-| `hot_specs` | `--hot` | `()` | Dirichlet heat-source patches; turns \(q\) off |
+| `hot_specs` | `--hot` | `()` | Dirichlet \(T\) patches; turns *uniform* \(q\) off |
 | `cold_specs` | `--cold` | `()` | Dirichlet sinks |
+| `q_specs` | `--q-region` | `()` | Cells that receive \(q_{\mathrm{vol}}\) (\(T\) floats). Same `face:` / `box:` language; a face marks the adjacent cell layer |
 | `symmetry` | `--symmetry` | `()` | Design mirrors: `x` and/or `y` |
 | `div_eps` | \(\varepsilon\) | \(10^{-4}\) | Stokes continuity regularizer \(\varepsilon p\) |
 | `solver_tol` | | \(10^{-7}\) | Krylov residual tolerance |
@@ -482,6 +491,7 @@ tuples. See `examples/configs/`.
 | `conjugate_stokes` | both | Stokes | \(0.45\) | \(2.0\) | \(40\) | same ports | `y` | flow 80, Uzawa 80, Schur 200, heat 320, filter 120 |
 | `custom_faces` | conduction | none | \(0.40\) | \(2.0\) | \(0\) | hot top / cold bottom, each `frac=0.5`; \(q=0\) | `x` | heat 400, filter 200 |
 | `custom_boxes` | conduction | none | \(0.40\) | \(2.0\) | \(0\) | hot `box:0.2,0.8,0.0,0.18`; cold `box:0.0,0.18,0.25,0.75` and `face:left`; \(q=0\) | none | heat 400, filter 200 |
+| `localized_source` | conduction | none | \(0.30\) | \(1.5\) | \(0\) | `q_specs=box:0.3,0.7,0.70,1.0`; cold `face:bottom:frac=0.08`; no Dirichlet hot | `x` | heat 400, filter 200 |
 
 ### 8.3 Optimizer kwargs (`optimize` / `optimize_hierarchy`)
 
@@ -559,7 +569,10 @@ not a crisp-design run. Short-run reference numbers used by CI are in
   centerline ports. A sealed design can run \(T\) away; the energy
   residual warns and the optimizer aborts if \(T\) blows up. Do not
   add a cold face to hide a blocked channel.
-- **Uniform \(q\).** Heat rejected is design-independent, so “maximize
-  heat transfer” is the wrong default objective for this setup.
+- **Volumetric \(q\).** Heat generated in the source region (the whole
+  box, or `q_specs`) is design-independent, so “maximize heat transfer”
+  is the wrong default objective whenever a volume source is on;
+  the objective is \(J=-\mathrm{mean}(T)\). Dirichlet-only runs use
+  heat leaving `hot_specs`.
 - **No property coupling** beyond \(\gamma\): \(k\), \(\alpha\), and
   \(\kappa\) do not depend on \(T\) or \(\mathbf{u}\).

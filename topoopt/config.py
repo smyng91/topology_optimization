@@ -41,12 +41,16 @@ class ColdPlateParams(NamedTuple):
         eta — tanh-projection threshold. q_k, q_alpha, q_kappa — RAMP /
         Borrvall–Petersson sharpness. k_fluid, k_solid, alpha_*, kappa_*.
     Forcing / BCs
-        q_vol — uniform volumetric heat (off when hot_specs is set).
-        pe — Péclet (zero in conduction). p_in — Darcy left-port pressure.
-        stokes_dp — Stokes left-port pressure. t_in, t_hot — Dirichlet
-        temperatures. port_frac — centered height of both vertical ports.
-        hot_specs, cold_specs — ``face:…`` / ``box:…`` strings.
-        symmetry — ``x`` and/or ``y`` mirror after every design step.
+        q_vol — volumetric heat strength. Uniform when q_specs is empty
+        and hot_specs is empty; restricted to q_specs otherwise. Off
+        when q_vol=0, or when hot_specs is set and q_specs is empty.
+        q_specs — ``face:…`` / ``box:…`` cells that receive q (T still
+        floats). pe — Péclet (zero in conduction). p_in — Darcy
+        left-port pressure. stokes_dp — Stokes left-port pressure.
+        t_in, t_hot — Dirichlet temperatures. port_frac — centered
+        height of both vertical ports. hot_specs, cold_specs —
+        ``face:…`` / ``box:…`` Dirichlet T patches. symmetry — ``x``
+        and/or ``y`` mirror after every design step.
     Solvers
         div_eps — Stokes continuity regularizer εp. solver_tol — Krylov
         tolerance. flow_iters — Darcy CG / Stokes momentum CG. uzawa_iters
@@ -84,6 +88,7 @@ class ColdPlateParams(NamedTuple):
     port_frac: float = 0.5
     hot_specs: tuple[str, ...] = ()
     cold_specs: tuple[str, ...] = ()
+    q_specs: tuple[str, ...] = ()
     symmetry: tuple[str, ...] = ()
     div_eps: float = 1.0e-4
     solver_tol: float = 1.0e-7
@@ -107,8 +112,14 @@ class ColdPlateParams(NamedTuple):
 
     @property
     def uses_volume_source(self) -> bool:
-        """Uniform volumetric heating when no Dirichlet heat-source patches exist."""
-        return self.q_vol != 0.0 and not self.hot_specs
+        """Nonzero q, either uniform or restricted to ``q_specs``.
+
+        Dirichlet ``hot_specs`` still turn off *uniform* q (legacy).
+        Set ``q_specs`` to heat a subdomain while keeping prescribed T.
+        """
+        if self.q_vol == 0.0:
+            return False
+        return bool(self.q_specs) or not self.hot_specs
 
     @property
     def heat_label(self) -> str:
@@ -136,7 +147,7 @@ def add_heat_mode_argument(parser) -> None:
     )
 
 
-_TUPLE_KEYS = ("n", "L", "hot_specs", "cold_specs", "symmetry")
+_TUPLE_KEYS = ("n", "L", "hot_specs", "cold_specs", "q_specs", "symmetry")
 _FILE_KEYS = set(ColdPlateParams._fields) | {
     "nx",
     "ny",

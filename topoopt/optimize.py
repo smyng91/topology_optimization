@@ -220,7 +220,7 @@ def optimize(
         f"({params.heat_label})  flow={params.flow_model if params.solves_flow else 'none'}  "
         f"Pe={params.effective_pe:g}  q={params.q_vol:g}  port={params.port_frac:g}  "
         f"vol*={params.vol_frac}  symmetry={sym}\n"
-        f"  hot={params.hot_specs}  cold={params.cold_specs}"
+        f"  hot={params.hot_specs}  cold={params.cold_specs}  q_region={params.q_specs}"
     )
     print(
         f"{'it':>4}  {'beta':>6}  {'J':>12}  {'vol':>8}  {'E_rms':>9}  "

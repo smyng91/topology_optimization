@@ -1,8 +1,8 @@
 """Named research configurations.
 
-The ``topoopt`` package is a generic solver. Geometry, ports, and hot/cold
-patches for the heated-box studies live here so you can add or swap cases
-without changing the library.
+The ``topoopt`` package is a generic solver. Geometry, ports, Dirichlet
+T patches, and volumetric ``q`` regions for the heated-box studies live
+here so you can add or swap cases without changing the library.
 
 Each factory returns a ``ColdPlateParams``. Extra keywords override the
 case defaults (mesh, solver iters, ``vol_frac``, …). The table of
@@ -25,6 +25,8 @@ from topoopt.config import ColdPlateParams, params2d
 CENTERLINE_PORT = 0.5
 # Narrow bottom sink for the volume-to-point conduction tree.
 TREE_SINK = ("face:bottom:frac=0.08",)
+# Top-center box that generates heat; T is not prescribed there.
+SOURCE_BOX = ("box:0.3,0.7,0.70,1.0",)
 
 
 def conduction_tree(nx: int = 40, ny: int = 40, **kwargs) -> ColdPlateParams:
@@ -174,6 +176,31 @@ def custom_boxes(nx: int = 40, ny: int = 40, **kwargs) -> ColdPlateParams:
     return params2d(nx, ny, **spec)
 
 
+def localized_source(nx: int = 40, ny: int = 40, **kwargs) -> ColdPlateParams:
+    """Volumetric heat in a top-center box; T floats there. ``J = -mean(T)``.
+
+    Overrides: ``heat_mode=conduction``, ``q_vol=1``, ``vol_frac=0.30``,
+    ``rmin=1.5``, ``q_specs=box:0.3,0.7,0.70,1.0``, empty ``hot_specs``,
+    ``cold_specs=face:bottom:frac=0.08``, ``symmetry=x``,
+    ``heat_iters=400``, ``filter_iters=200``. Combine with ``hot_specs``
+    to also prescribe Dirichlet T.
+    """
+    spec = dict(
+        heat_mode="conduction",
+        q_vol=1.0,
+        vol_frac=0.30,
+        rmin=1.5,
+        q_specs=SOURCE_BOX,
+        hot_specs=(),
+        cold_specs=TREE_SINK,
+        symmetry=("x",),
+        heat_iters=400,
+        filter_iters=200,
+    )
+    spec.update(kwargs)
+    return params2d(nx, ny, **spec)
+
+
 PROBLEMS = {
     "conduction_tree": conduction_tree,
     "convection_darcy": convection_darcy,
@@ -181,4 +208,5 @@ PROBLEMS = {
     "conjugate_stokes": conjugate_stokes,
     "custom_faces": custom_faces,
     "custom_boxes": custom_boxes,
+    "localized_source": localized_source,
 }

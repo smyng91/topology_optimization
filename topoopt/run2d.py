@@ -29,7 +29,12 @@ def build_parser():
     add_region_arguments(p)
     p.add_argument("--flow", choices=("stokes", "darcy"), default=None)
     p.add_argument("--pe", type=float, default=None)
-    p.add_argument("--q", type=float, default=None, help="Uniform volumetric heat source")
+    p.add_argument(
+        "--q",
+        type=float,
+        default=None,
+        help="Volumetric heat strength (uniform, or on --q-region only)",
+    )
     p.add_argument("--k-ratio", type=float, default=None)
     p.add_argument("--rmin", type=float, default=None)
     p.add_argument(
@@ -61,7 +66,7 @@ def build_parser():
 
 
 def _cli_overrides(args) -> dict:
-    hot_specs, cold_specs = specs_from_cli(args.hot, args.cold)
+    hot_specs, cold_specs, q_specs = specs_from_cli(args.hot, args.cold, args.q_region)
     out = {}
     if args.nx is not None:
         out["nx"] = args.nx
@@ -87,6 +92,8 @@ def _cli_overrides(args) -> dict:
         out["hot_specs"] = hot_specs
     if args.cold:
         out["cold_specs"] = cold_specs
+    if args.q_region:
+        out["q_specs"] = q_specs
     if args.symmetry is not None:
         out["symmetry"] = args.symmetry
     return out

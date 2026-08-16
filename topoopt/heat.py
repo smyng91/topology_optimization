@@ -2,8 +2,9 @@
 
     −∇·(k ∇T) + Pe u·∇T = q
 
-``q`` is a uniform volumetric source when no Dirichlet heat-source patches
-are set. ``heat_mode`` selects which terms are active:
+``q`` is ``q_vol`` everywhere, or only on ``q_specs`` cells, or off
+(see ``uses_volume_source``). Dirichlet ``hot_specs`` prescribe *T*,
+not generation. ``heat_mode`` selects which terms are active:
 
 - ``conduction``: Pe = 0, k = k(γ), no flow
 - ``convection``: Pe > 0, k = k_fluid (uniform), one left-centerline inlet
@@ -25,6 +26,7 @@ from topoopt.regions import (
     face_dirichlets,
     face_heat_into_domain,
     volume_heat_from_cells,
+    volume_source_field,
 )
 from topoopt.solvers import implicit_nonsym_solve
 
@@ -123,7 +125,7 @@ def solve_energy(gamma, face_vel, params: ColdPlateParams, q=None):
         return energy_operator(T, k, face_vel, params, 0.0, 0.0, 0.0)
 
     if q is None:
-        q = params.q_vol if params.uses_volume_source else 0.0
+        q = volume_source_field(params)
     rhs = -energy_operator(
         jnp.zeros_like(gamma), k, face_vel, params, params.t_in, params.t_hot, q
     )
@@ -134,11 +136,11 @@ def solve_energy(gamma, face_vel, params: ColdPlateParams, q=None):
 
 
 def total_heat_transfer(gamma, T, params: ColdPlateParams):
-    """Heat leaving Dirichlet sources, or −mean(T) for a uniform volume source.
+    """Heat leaving Dirichlet sources, or −mean(T) when a volume source is on.
 
-    With uniform volumetric heating the heat that eventually leaves the box is
-    fixed (∫q dV), so the design objective is to *cool* the domain: maximize
-    ``−mean(T)``.
+    With volumetric heating (uniform or ``q_specs``) ∫q dV is design-
+    independent, so the objective is to *cool* the domain: maximize
+    ``−mean(T)``. Dirichlet-only runs maximize heat leaving ``hot_specs``.
     """
     if params.uses_volume_source:
         return -jnp.mean(T)

@@ -2,8 +2,9 @@
 
 JAX package for density-based topology optimization of a 2-D heated square box.
 The design field `γ` is solid (`γ = 1`, conducting, impermeable) or fluid
-(`γ = 0`). Heat is a uniform volumetric source unless `--hot` sets Dirichlet
-heat-source patches. Sensitivities are discrete global adjoints.
+(`γ = 0`). Heat is a uniform volumetric source, or only on `--q-region`
+cells; `--hot` / `--cold` prescribe Dirichlet *T* (and turn off *uniform*
+`q` unless a `q` region is set). Sensitivities are discrete global adjoints.
 
 The model (physics, discretization, adjoint, optimizer) is in
 [docs/model.md](docs/model.md).
@@ -50,8 +51,9 @@ Pinned versions from the development venv are in
 
 ## Problem configs
 
-Geometry, ports, and hot/cold patches are **not** hardcoded in the
-package. Named cases live in [`examples/problems.py`](examples/problems.py):
+Geometry, ports, Dirichlet *T* patches, and volumetric `q` regions are
+**not** hardcoded in the package. Named cases live in
+[`examples/problems.py`](examples/problems.py):
 
 ```bash
 python -m topoopt 2d --config examples.problems:conduction_tree
@@ -69,8 +71,8 @@ python -m topoopt 2d --config examples.problems:conduction_tree --mesh-schedule 
 ```
 
 JSON may name a `factory` or list `nx` / `ny` / `hot_specs` / `cold_specs`
-/ `symmetry` directly. YAML works if PyYAML is installed. Factory
-overrides (volume, `rmin`, ports, solver caps) are tabulated in
+/ `q_specs` / `symmetry` directly. YAML works if PyYAML is installed.
+Factory overrides (volume, `rmin`, ports, solver caps) are tabulated in
 [examples/README.md](examples/README.md) and [docs/model.md](docs/model.md) §8.2.
 
 ## Tutorials
@@ -82,7 +84,7 @@ python examples/01_analyze_once.py              # analyze() only, no TO
 python examples/02_conduction_tree.py
 python examples/03_convection_darcy.py
 python examples/04_conjugate_stokes.py
-python examples/05_custom_regions.py
+python examples/05_custom_regions.py           # Dirichlet T; --source for volumetric q
 python examples/06_mms_check.py
 python examples/run_all.py --quick              # coarse smoke of every tutorial
 ```
@@ -100,16 +102,24 @@ python -m topoopt 2d --config examples.problems:conjugate_stokes --outdir output
 
 `--heat` only selects which PDE terms are on (conduction / convection / both).
 Inlets, outlets, and Dirichlet patches come from `--config` or explicit
-`--hot` / `--cold` / `--port-frac`.
+`--hot` / `--cold` / `--q-region` / `--port-frac`.
 
-Default objective is `J = -mean(T)`. `--hot` turns off the volume source and
-sets `J` to the conductive heat leaving those patches.
+Default objective is `J = -mean(T)` when a volume source is on (the whole
+box, or `--q-region`). `--hot` without `--q-region` turns off uniform `q`
+and sets `J` to the conductive heat leaving those patches.
 
 ```bash
 python -m topoopt 2d --heat conduction --hot face:top --cold face:bottom:frac=0.5
+python -m topoopt 2d --heat conduction --q-region box:0.3,0.7,0.70,1.0 --cold face:bottom:frac=0.08
+python -m topoopt 2d --config examples.problems:localized_source
 python -m topoopt verify
 python -m topoopt examples
 ```
+
+`--hot` / `--cold` fix *T* on a face or box. `--q-region` uses the same
+spec language but generates heat there (*T* still floats). A face `q`
+spec heats the adjacent cell layer. Orange plot overlays are `q`;
+crimson / sky-blue are Dirichlet *T*.
 
 Every `ColdPlateParams` field and optimizer kwarg is listed in
 [docs/model.md](docs/model.md) §8. Tutorial / gallery numbers are in
@@ -127,7 +137,8 @@ Every `ColdPlateParams` field and optimizer kwarg is listed in
 | `--k-ratio` | `k_solid` (`k_fluid` stays 1) | 100 |
 | `--rmin` | `rmin` (cells) | 2.2 |
 | `--port-frac` | `port_frac` | 0.5 |
-| `--hot`, `--cold` | `hot_specs` / `cold_specs` | empty |
+| `--hot`, `--cold` | `hot_specs` / `cold_specs` (Dirichlet *T*) | empty |
+| `--q-region` | `q_specs` (volumetric *q*; *T* floats) | empty (uniform `q`) |
 | `--symmetry {x,y,x,y}` | `symmetry` | from the factory, else none |
 | `--iters` | design steps | 80 |
 | `--lr` | move at `β=1` | 0.2 (`ℓ = lr/√β`) |

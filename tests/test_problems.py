@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from examples.problems import (
     PROBLEMS,
+    SOURCE_BOX,
     TREE_SINK,
     conduction_tree,
     conjugate_darcy,
     conjugate_stokes,
     convection_darcy,
+    localized_source,
 )
 from topoopt.config import load_params, params2d
 
@@ -24,8 +26,15 @@ def test_example_problem_boundary_conditions():
     tree = conduction_tree(nx=8, ny=8)
     assert tree.cold_specs == TREE_SINK
     assert tree.hot_specs == ()
+    assert tree.q_specs == ()
     assert not tree.solves_flow
     assert tree.symmetry == ("x",)
+
+    src = localized_source(nx=8, ny=8)
+    assert src.q_specs == SOURCE_BOX
+    assert src.hot_specs == ()
+    assert src.uses_volume_source
+    assert src.cold_specs == TREE_SINK
 
     conv = convection_darcy(nx=8, ny=8)
     assert conv.cold_specs == () and conv.hot_specs == ()
@@ -54,6 +63,7 @@ def test_load_params_module_and_overrides():
         "conjugate_stokes",
         "custom_faces",
         "custom_boxes",
+        "localized_source",
     }
 
 
@@ -71,6 +81,11 @@ def test_load_params_json_factory_and_standalone():
     assert box.cold_specs == ("face:bottom:frac=0.08",)
     assert box.symmetry == ("x",)
     assert box.vol_frac == 0.3
+
+    src = load_params(str(root / "examples/configs/localized_source.json"))
+    assert src.n == (32, 32)
+    assert src.q_specs == SOURCE_BOX
+    assert src.uses_volume_source
 
 
 def test_package_config_does_not_import_examples():
