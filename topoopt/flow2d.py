@@ -3,15 +3,16 @@
     −∇²u + α(γ) u + ∇p = 0
     ∇·u = 0
 
-Inlet / outlet are centered ports occupying ``port_frac`` of the left / right
-walls. Both ports are **pressure-driven** (same idea as Darcy): p = p_in on
-the left port, p = 0 on the right port, ∂u/∂x = 0 on the openings. Off-port
-walls are no-slip. Throughput is therefore design-dependent — block the path
-and the flow drops.
+One inlet on the left-wall centerline and one outlet on the right-wall
+centerline occupy ``port_frac`` of those walls. Both ports are
+**pressure-driven** (same idea as Darcy): p = p_in on the left port,
+p = 0 on the right port, ∂u/∂x = 0 on the openings. Off-port walls are
+no-slip. There are no other inlets or outlets. Throughput is
+design-dependent — block the path and the flow drops.
 
-Solid is a Brinkman penalty rather than a geometric hole. Forward: SIMPLE-scaled
-Uzawa (CG on each momentum block). Reverse: residual discrete adjoint, so the
-    gradient matches R(u,p;γ)=0 even if Uzawa is inexact.
+Solid is a Brinkman penalty rather than a geometric hole. Forward: Uzawa
+warm start, then CG on the pressure Schur complement so R(u,p;γ)≈0.
+Reverse: residual discrete adjoint (not an unrolled Uzawa loop).
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ import jax.numpy as jnp
 from topoopt.config import ColdPlateParams
 from topoopt.grid import port_mask
 from topoopt.interpolation import brinkman_alpha
-from topoopt.solvers import implicit_nonsym_solve, implicit_spd_solve
+from topoopt.solvers import implicit_nonsym_solve, iterative_spd_solve
 
 
 def _alpha_u(alpha):
@@ -137,12 +138,13 @@ def _residual_diag(gamma, params: ColdPlateParams):
     return du, dv, dp
 
 
-def _solve_velocity(gamma, p, params: ColdPlateParams):
+def _solve_velocity(gamma, p, params: ColdPlateParams, p_drive: float | None = None):
     dx, dy = params.dx
     alpha = brinkman_alpha(gamma, params)
     au, av = _alpha_u(alpha), _alpha_v(alpha)
     port = port_mask(params)
-    rhs_u = -_gradp_u(p, dx, _p_drive(params))
+    drive = _p_drive(params) if p_drive is None else p_drive
+    rhs_u = -_gradp_u(p, dx, drive)
     rhs_u = rhs_u.at[0, :].set(jnp.where(port, rhs_u[0, :], 0.0))
     rhs_u = rhs_u.at[-1, :].set(jnp.where(port, rhs_u[-1, :], 0.0))
     rhs_v = (-_gradp_v(p, dy)).at[:, 0].set(0.0).at[:, -1].set(0.0)
@@ -156,8 +158,8 @@ def _solve_velocity(gamma, p, params: ColdPlateParams):
         r = av * v - _lap_v(v, dx, dy)
         return r.at[:, 0].set(v[:, 0]).at[:, -1].set(v[:, -1])
 
-    u = implicit_spd_solve(au_mv, rhs_u, _diag_u(au, dx, dy, port), niter=params.flow_iters, tol=params.solver_tol)
-    v = implicit_spd_solve(av_mv, rhs_v, _diag_v(av, dx, dy), niter=params.flow_iters, tol=params.solver_tol)
+    u = iterative_spd_solve(au_mv, rhs_u, _diag_u(au, dx, dy, port), niter=params.flow_iters, tol=params.solver_tol)
+    v = iterative_spd_solve(av_mv, rhs_v, _diag_v(av, dx, dy), niter=params.flow_iters, tol=params.solver_tol)
     return u, v
 
 
@@ -175,15 +177,50 @@ def _uzawa_forward(gamma, params: ColdPlateParams):
     return u, v, p
 
 
+def _schur_correct(p0, gamma, params: ColdPlateParams):
+    """CG on the pressure Schur complement S = D A^{-1} G + ε I.
+
+    Stokes–Brinkman is affine in (u, v, p) at fixed γ. One Schur solve
+    plus a final momentum solve is an exact Newton step for R=0, and CG
+    is stable on high-contrast Brinkman fields (saddle-point BiCGSTAB
+    is not).
+    """
+    dx, dy = params.dx
+    _du, _dv, dp = _residual_diag(gamma, params)
+
+    def schur_mv(p):
+        u, v = _solve_velocity(gamma, p, params, p_drive=0.0)
+        return _div(u, v, dx, dy) + params.div_eps * p
+
+    u0, v0 = _solve_velocity(gamma, p0, params)
+    rhs = -(_div(u0, v0, dx, dy) + params.div_eps * p0)
+    p = p0 + iterative_spd_solve(
+        schur_mv, rhs, dp, niter=params.stokes_kryl_iters, tol=params.solver_tol
+    )
+    u, v = _solve_velocity(gamma, p, params)
+    return u, v, p
+
+
+def _stokes_forward(gamma, params: ColdPlateParams):
+    if params.uzawa_iters > 0:
+        _u, _v, p0 = _uzawa_forward(gamma, params)
+    else:
+        p0 = jnp.zeros(params.n)
+    if params.stokes_kryl_iters <= 0:
+        u, v = _solve_velocity(gamma, p0, params)
+        return u, v, p0
+    return _schur_correct(p0, gamma, params)
+
+
 def solve_stokes(gamma, params: ColdPlateParams):
-    """Uzawa forward solve; reverse mode is the residual discrete adjoint."""
+    """Uzawa warm start + Schur CG; reverse mode is the residual adjoint."""
 
     @jax.custom_vjp
     def _solve(g):
-        return _uzawa_forward(g, params)
+        return _stokes_forward(g, params)
 
     def _fwd(g):
-        sol = _uzawa_forward(g, params)
+        sol = _stokes_forward(g, params)
         return sol, (g, sol)
 
     def _bwd(res, gsol):
@@ -196,7 +233,7 @@ def solve_stokes(gamma, params: ColdPlateParams):
             jtv,
             gsol,
             _residual_diag(g, params),
-            niter=max(params.flow_iters, 400),
+            niter=max(params.stokes_kryl_iters, params.flow_iters, 400),
             tol=params.solver_tol,
         )
         g_gamma = -jax.vjp(lambda gg: stokes_residual(sol, gg, params), g)[1](lam)[0]

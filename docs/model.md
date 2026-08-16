@@ -17,12 +17,15 @@ are active.
 
 | Mode | Flow | Conductivity | Thermal BCs (defaults) | Source |
 |---|---|---|---|---|
-| `conduction` | off, \(\mathrm{Pe}=0\) | \(k(\gamma)\) | centered 50% of the bottom wall at \(T=0\); other walls adiabatic | uniform \(q\) |
-| `convection` | on | uniform \(k_\mathrm{fluid}\) | centered 50% ports on left/right; inlet \(T=0\); rest of walls no-slip / impermeable | uniform \(q\) |
-| `both` | on | \(k(\gamma)\) | same ports as convection | uniform \(q\) |
+| `conduction` | off, \(\mathrm{Pe}=0\) | \(k(\gamma)\) | centered 8% of the bottom wall at \(T=0\); other walls adiabatic | uniform \(q\) |
+| `convection` | on | uniform \(k_\mathrm{fluid}\) | one left-centerline inlet, one right-centerline outlet; inlet \(T=0\) by advection; no other inlets, outlets, or cold patches | uniform \(q\) |
+| `both` | on | \(k(\gamma)\) | same single inlet / outlet as convection | uniform \(q\) |
 
-`--hot` / `--cold` replace the default thermal patches. Setting `--hot`
-turns the volume source off.
+These BCs are **example configurations**, not library defaults. They are
+defined in `examples/problems.py` and loaded with
+`--config examples.problems:<name>`. The solver accepts any
+`hot_specs` / `cold_specs` / `port_frac`. Setting `--hot` turns the
+volume source off.
 
 **Notation.** \(\gamma\) is the raw design. \(\tilde\gamma\) is the Helmholtz-filtered
 field. \(\bar\gamma\) is the projected physical density used in the PDEs.
@@ -113,9 +116,13 @@ approximately divergence-free.
   walls \(\partial T/\partial n=0\). A wide sink (`--cold face:bottom:frac=0.5`)
   prefers parallel fins instead. The conduction example also uses a
   lower solid fraction (\(v^\*=0.30\)) so the trunk can stay thin.
-- Flow modes: fluid entering the left port carries \(T_{\mathrm{in}}=0\).
-  Outflow uses upwind interior temperature. Walls without a Dirichlet
-  patch are adiabatic for diffusion.
+- Flow modes: one inlet on the left-wall centerline and one outlet on
+  the right-wall centerline (`port_frac` of the height, default \(0.5\)).
+  Fluid entering the inlet carries \(T_{\mathrm{in}}=0\). Outflow uses
+  upwind interior temperature. There are **no** other inlets, outlets,
+  or cold Dirichlet patches — remaining walls are adiabatic for
+  diffusion and no-slip / impermeable for flow. A blocked design can
+  therefore run \(T\) away.
 - Optional `--hot` / `--cold` faces or boxes override the defaults.
   Specs: `face:bottom:frac=0.5`, `face:top:frac=0.4:center=0.3`,
   `box:xmin,xmax,ymin,ymax`.
@@ -132,8 +139,9 @@ Solid is a Brinkman penalty, not a geometric hole. Continuity is
 regularized in the discrete residual by a small \(\varepsilon p\) term
 (\(\varepsilon=10^{-4}\)).
 
-**Velocity / pressure BCs** (centered ports of height `port_frac` on the
-left and right walls), the same pressure-driven idea as Darcy:
+**Velocity / pressure BCs** (one inlet and one outlet, each of height
+`port_frac` on the left- and right-wall centerlines), the same
+pressure-driven idea as Darcy:
 
 - Left port: \(p=\Delta p\) (`stokes_dp`, default \(20\)) and \(\partial u/\partial x=0\).
 - Right port: \(p=0\) and \(\partial u/\partial x=0\).
@@ -206,20 +214,50 @@ gradients use a half-cell to the face value (\(p_{\mathrm{in}}\) or
 R_p=\nabla\cdot\mathbf{u}+\varepsilon p.
 \]
 
-**Forward solve:** Uzawa / pressure-correction. For frozen pressure the
-momentum blocks are SPD and solved with CG. Pressure is updated
-\(p\leftarrow p-\omega\nabla\cdot\mathbf{u}\) with \(\omega=0.6\) for
-`uzawa_iters` passes (default \(200\)). Scaled SIMPLE updates are
-unstable on an open (low-\(\alpha\)) box with these port BCs.
+**Forward solve:** Uzawa / pressure-correction warm start, then CG on
+the pressure Schur complement \(S=DA^{-1}G+\varepsilon I\). For frozen
+pressure the momentum blocks are SPD and solved with CG. Pressure is
+updated \(p\leftarrow p-\omega\nabla\cdot\mathbf{u}\) with \(\omega=0.6\)
+for `uzawa_iters` passes (default \(80\)). Scaled SIMPLE Richardson
+updates alone stall on high-contrast Brinkman fields; the Schur CG
+correction
+
+\[
+S\,\mathrm{d}p=-(\nabla\cdot\mathbf{u}(p_0)+\varepsilon p_0),\qquad
+p\leftarrow p_0+\mathrm{d}p
+\]
+
+is an exact Newton step because Stokes–Brinkman is affine in
+\((\mathbf{u},p)\) at fixed \(\bar\gamma\). Jacobi-preconditioned CG
+(`stokes_kryl_iters`, default \(200\)) drives \(\|R\|\) to the solver
+tolerance. Set `stokes_kryl_iters=0` to skip the correction. A
+saddle-point BiCGSTAB correction is *not* used — it is unstable when
+\(\alpha(\bar\gamma)\) jumps.
 
 **Adjoint:** `jax.custom_vjp` on the residual \(R(\mathbf{u},p;\bar\gamma)=0\),
 solved with BiCGSTAB (at least \(400\) iterations). This is the discrete
-adjoint of the PDE, not an unrolled Uzawa loop.
+adjoint of the PDE, not an unrolled Uzawa loop. After the Schur
+correction the forward state satisfies \(R\approx 0\), so the adjoint
+matches a consistent discrete solve (checked against central FD on
+throughput).
 
-**Linear solvers.** Filter, Darcy, and Stokes momentum use
-Jacobi-preconditioned CG. Energy and the Stokes adjoint use
-Jacobi-preconditioned BiCGSTAB. Iteration caps: filter \(200\), flow
-\(80\), heat \(400\). Tolerance \(10^{-7}\).
+**Linear solvers.** Filter, Darcy, Stokes momentum, and the Stokes
+pressure Schur use Jacobi-preconditioned CG. Energy and the Stokes
+adjoint use Jacobi-preconditioned BiCGSTAB. Iteration caps: filter
+\(200\), flow \(80\), Stokes Schur \(200\), heat \(400\). Tolerance
+\(10^{-7}\).
+
+**Verification.** `tests/test_mms.py` checks manufactured / exact
+solutions and observed order: energy Poisson (\(T=\sin\pi x\sin\pi y\),
+order \(\approx 2\)), energy with uniform advection (order \(\gtrsim 1\)),
+variable-\(k(\gamma)\) energy consistency (discrete operator as the
+source), Helmholtz filter on the Neumann cosine
+\(\tilde\gamma=\cos\pi x\cos\pi y\) (error decreases under refinement;
+the discrete inverse \(( -r^2\nabla^2+I)^{-1}(-r^2\nabla^2+I)\) recovers
+the field to the Krylov tolerance), Darcy linear pressure on a
+full-height port, and Stokes–Poiseuille on a full-height
+pressure-driven channel. The Stokes adjoint is checked by central FD
+on throughput and on the full `analyze` path (filter + energy).
 
 ## 5. Objective and volume constraint
 
@@ -291,8 +329,8 @@ gives \(\mathrm{d}J/\mathrm{d}\bar\gamma\) consistent with the discrete
 operator. For the nonsymmetric energy operator, JAX supplies \(A^\top\)
 by automatic transposition of the matvec.
 
-Stokes uses a residual `custom_vjp`: the forward Uzawa loop is not
-unrolled. Reverse mode solves
+Stokes uses a residual `custom_vjp`: the forward Uzawa + Schur-CG
+correction is not unrolled. Reverse mode solves
 
 \[
 \Bigl(\frac{\partial R}{\partial(\mathbf{u},p)}\Bigr)^\top\lambda
@@ -312,32 +350,56 @@ design \(\gamma\).
 ## 7. Optimizer
 
 Projected gradient descent with \(\beta\)-continuation, a decaying move
-limit, and keep-best.
+limit, keep-best, optional mesh continuation, and a symmetry projection.
+
+**Why a symmetric problem used to look skewed.** The PDEs, mesh, and
+example BCs are mirrors: a centered bottom sink is left–right
+symmetric; centerline ports are top–bottom symmetric (not left–right —
+inlet \(\neq\) outlet). The breaker was the init
+\(\gamma\leftarrow v^\*+0.08\,(\mathrm{U}[0,1]-\tfrac12)\). That noise
+is not invariant under a flip, so the first gradient already prefers
+one side and the tree or channel grows crooked. `params.symmetry`
+(`x` and/or `y`) mirrors the noise and every accepted design,
+\(\gamma\leftarrow\tfrac12(\gamma+\mathrm{flip}(\gamma))\). Named
+factories set this (`conduction_tree` / `custom_faces`: `x`;
+centerline-port flow cases: `y`; `custom_boxes`: none). Krylov
+roundoff can still seed a tiny asymmetry; the projection kills it
+each step.
 
 1. Initialize \(\gamma\) near \(v^\*\) plus uniform noise of amplitude
-   \(0.08\). Flow problems replace that with a mid-height open duct
-   (fluid band of height `port_frac`) plus the same noise — required for
-   Stokes, and used for Darcy as well. Then enforce the volume constraint
+   \(0.08\), then symmetrize. Flow problems replace that with a
+   mid-height open duct (fluid band of height `port_frac`) plus the
+   same (symmetrized) noise — required for Stokes, and used for Darcy
+   as well. A caller may pass `start_gamma` instead (used by
+   coarse-to-fine continuation). Then enforce the volume constraint
    at \(\beta=1\), and (Stokes only) pin port cells to fluid.
 2. For iteration \(i=1,\ldots,N\) (default \(N=80\)):
    - set \(\beta\) from the continuation schedule;
-   - enforce volume (and Stokes port pin);
+   - enforce symmetry, volume, and the Stokes port pin;
    - evaluate \(J\) and \(\nabla_\gamma(-J)\) with a JIT
      `value_and_grad`;
    - take a mean-zero projected step of size
      \(\ell=\ell_0/\sqrt{\max(\beta,1)}\);
-   - enforce volume again.
+   - enforce symmetry / volume / pin again.
    Diagnostics from `analyze` aux are printed each iteration: energy
    residual RMS, \(\|\nabla\cdot\mathbf{u}\|_{\mathrm{rms}}\), port mass
-   error, and grayness. A warning is issued (no abort) if the energy
-   residual RMS exceeds \(10^{-2}\) or, when flow is on, the port mass
-   error exceeds \(0.15\).
-3. Keep the design with the largest \(J\). Write `history.json`,
-   `run.json` (serializable params, \(J_0\), \(J_{\mathrm{final}}\),
-   \(J_{\mathrm{best}}\), last diagnostics), `state_best.npz`,
-   `state_final.npz`, PNG slices, and a VTK file of cell-centered
-   \(\bar\gamma\), \(T\), \(|\mathbf{u}|\), and \(p\). The optimize
-   return value is the **best-\(J\)** design.
+   error, and grayness. A warning is issued if the energy residual RMS
+   exceeds \(10^{-2}\) or, when flow is on, the port mass error exceeds
+   \(0.15\). If \(T\) is non-finite, \(T_{\max}>10^3\), or a flow solve
+   has both a large energy residual and \(T_{\max}>50\), the run
+   **aborts** after writing the best-\(J\) checkpoint
+   (`RunawaySolveError`). Flow modes have no extra cold patch.
+3. Keep the design with the largest \(J\). At \(\beta_{\max}\), stop
+   early if \(J\) has not improved for `stall_iters` iterations
+   (default 8) so high-\(\beta\) chatter does not run out the budget.
+   Write `history.json`, `run.json` (serializable params, \(J_0\),
+   \(J_{\mathrm{final}}\), \(J_{\mathrm{best}}\), `stopped`, last
+   diagnostics), `state_best.npz`, `state_final.npz`, PNG slices, and
+   a VTK file of cell-centered \(\bar\gamma\), \(T\), \(|\mathbf{u}|\),
+   and \(p\). The optimize return value is the **best-\(J\)** design.
+
+`optimize_hierarchy` resizes the best field with bilinear interpolation
+and continues on a finer mesh (`--mesh-schedule nx,ny,iters:…`).
 
 There is no MMA / IPOPT / optimality-criteria loop. The volume equality
 is a hard projection, not a penalty.
@@ -361,19 +423,26 @@ is a hard projection, not a penalty.
 | Port / sink fraction | `--port-frac` | \(0.5\) |
 | Inlet / Darcy pressure | \(p_{\mathrm{in}}\) | \(1\) |
 | Stokes pressure drop | `stokes_dp` | \(20\) |
+| Uzawa warm-start passes | `uzawa_iters` | \(80\) |
+| Stokes Schur CG | `stokes_kryl_iters` | \(200\) |
 | Inlet / hot temperatures | \(T_{\mathrm{in}}\), \(T_{\mathrm{hot}}\) | \(0\), \(1\) |
 | Brinkman \(\alpha_{\max}\) | | \(10^{5}\) |
 | Darcy \(\kappa_{\min}\) | | \(10^{-6}\) |
 | Continuity regularizer | \(\varepsilon\) | \(10^{-4}\) |
 | Solver tolerance | | \(10^{-7}\) |
 | Random seed | `--seed` | \(0\) |
+| Design symmetry | `--symmetry` | from the named factory (`x`, `y`, or none) |
 
-Example gallery (`python -m topoopt examples`) uses \(80\times 80\)
+Example gallery (`python examples/gallery.py`, also
+`python -m topoopt examples`) uses \(80\times 80\)
 (Stokes \(48\times 48\)), \(150\)–\(200\) iterations (Stokes \(100\)),
-\(\beta_{\max}=32\), \(r_{\min}=2.0\) (conduction \(1.5\)). The
-conduction case uses a small bottom sink and \(v^\*=0.30\) so a
-branching tree can form. `python -m topoopt verify` is a short physics
-check, not a crisp-design run.
+\(\beta_{\max}=32\), \(r_{\min}=2.0\) (conduction \(1.5\)). Outputs go
+under `outputs/` (gitignored). The conduction case uses a small bottom
+sink and \(v^\*=0.30\) so a branching tree can form. Committed
+snapshots from shorter runs are in `docs/figures/`. JSON problem files
+are in `examples/configs/`. `python -m topoopt verify` is a short
+physics check, not a crisp-design run. Short-run reference numbers
+used by CI are in `examples/reference.json`.
 
 ## 9. Limitations
 
@@ -387,14 +456,18 @@ check, not a crisp-design run.
   Some leakage through “solid” remains.
 - **First-order upwind** adds numerical diffusion at high \(\mathrm{Pe}\).
 - **Iterative solves** are capped. Poorly conditioned high-\(\beta\)
-  designs can leave a nonzero residual.
+  designs can leave a nonzero residual; the optimizer warns if the
+  energy residual RMS exceeds \(10^{-2}\) or the port mass error
+  exceeds \(0.15\).
 - **Conduction at high \(\beta\).** With a volume source and a small
   sink, \(J=-\mathrm{mean}(T)\) can still oscillate once the projection
   becomes sharp (\(\beta\gtrsim 16\)). The \(\beta\)-damped move limit
   and keep-best reduce the chatter that reaches the returned design;
   volume stays at \(v^\*\).
-- **Blocked flow, no conduction sink.** Flow modes have no cold patch.
-  A sealed design can run \(T\) away; the energy residual will warn.
+- **Blocked flow, no conduction sink.** Flow modes have only the
+  centerline ports. A sealed design can run \(T\) away; the energy
+  residual warns and the optimizer aborts if \(T\) blows up. Do not
+  add a cold face to hide a blocked channel.
 - **Uniform \(q\).** Heat rejected is design-independent, so “maximize
   heat transfer” is the wrong default objective for this setup.
 - **No property coupling** beyond \(\gamma\): \(k\), \(\alpha\), and

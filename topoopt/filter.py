@@ -26,9 +26,20 @@ def _laplacian_neumann(x, dxs):
     return lap
 
 
+def filter_radius(params: ColdPlateParams) -> float:
+    """Physical Helmholtz radius: ``r = rmin * min(dx)``."""
+    return params.rmin * min(params.dx)
+
+
+def helmholtz_operator(x, params: ColdPlateParams):
+    """Discrete ``(-r²∇² + I) x`` with the same Neumann Laplacian as the filter."""
+    r = filter_radius(params)
+    return x - (r * r) * _laplacian_neumann(x, params.dx)
+
+
 def helmholtz_filter(gamma_raw, params: ColdPlateParams):
     """Solve (-r^2 ∇² + I) γ̃ = γ with r = rmin * min(dx)."""
-    r = params.rmin * min(params.dx)
+    r = filter_radius(params)
     r2 = r * r
     diag = jnp.ones_like(gamma_raw)
     for dx in params.dx:
@@ -36,7 +47,7 @@ def helmholtz_filter(gamma_raw, params: ColdPlateParams):
         diag = diag + r2 * (2.0 / (dx * dx))
 
     def matvec(x):
-        return x - r2 * _laplacian_neumann(x, params.dx)
+        return helmholtz_operator(x, params)
 
     return implicit_spd_solve(
         matvec,

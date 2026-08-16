@@ -6,8 +6,9 @@
 are set. ``heat_mode`` selects which terms are active:
 
 - ``conduction``: Pe = 0, k = k(γ), no flow
-- ``convection``: Pe > 0, k = k_fluid (uniform), flow solved
-- ``both``: Pe > 0, k = k(γ), conjugate heat transfer
+- ``convection``: Pe > 0, k = k_fluid (uniform), one left-centerline inlet
+  and one right-centerline outlet, no cold patches
+- ``both``: Pe > 0, k = k(γ), same ports, conjugate heat transfer
 """
 
 from __future__ import annotations
@@ -115,13 +116,14 @@ def energy_diagonal(k, face_vel, params: ColdPlateParams):
     return diag + 1e-8
 
 
-def solve_energy(gamma, face_vel, params: ColdPlateParams):
+def solve_energy(gamma, face_vel, params: ColdPlateParams, q=None):
     k = conductivity(gamma, params)
 
     def matvec(T):
         return energy_operator(T, k, face_vel, params, 0.0, 0.0, 0.0)
 
-    q = params.q_vol if params.uses_volume_source else 0.0
+    if q is None:
+        q = params.q_vol if params.uses_volume_source else 0.0
     rhs = -energy_operator(
         jnp.zeros_like(gamma), k, face_vel, params, params.t_in, params.t_hot, q
     )

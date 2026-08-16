@@ -1,0 +1,14 @@
+{
+  "comment": "No factory: a generic conduction box assembled from this file alone.",
+  "nx": 16,
+  "ny": 16,
+  "heat_mode": "conduction",
+  "vol_frac": 0.3,
+  "rmin": 1.5,
+  "q_vol": 1.0,
+  "hot_specs": [],
+  "cold_specs": ["face:bottom:frac=0.08"],
+  "symmetry": ["x"],
+  "heat_iters": 200,
+  "filter_iters": 80
+}

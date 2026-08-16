@@ -1,0 +1,6 @@
+{
+  "comment": "Uniform-k Darcy cooling. Symmetric across y (centerline ports), not x.",
+  "factory": "examples.problems:convection_darcy",
+  "nx": 40,
+  "ny": 40
+}

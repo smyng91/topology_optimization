@@ -5,7 +5,8 @@ from __future__ import annotations
 import jax.numpy as jnp
 import numpy as np
 
-from topoopt.config import default_2d
+from examples.problems import TREE_SINK, conduction_tree, conjugate_darcy, conjugate_stokes, convection_darcy
+from topoopt.config import params2d
 from topoopt.heat import energy_operator, solve_energy
 from topoopt.interpolation import conductivity
 from topoopt.problem import analyze
@@ -21,23 +22,16 @@ def test_parse_region_specs():
     hot, cold = specs_from_cli(
         ["face:bottom:frac=0.4", "box:0.1,0.3,0.0,0.2"],
         ["face:left", "face:top:frac=0.3"],
-        "conduction",
-        0.5,
     )
     assert hot == ("face:bottom:frac=0.4", "box:0.1,0.3,0.0,0.2")
     assert cold == ("face:left", "face:top:frac=0.3")
-    hot_c, cold_c = specs_from_cli(None, None, "conduction", 0.5)
-    assert hot_c == ()
-    assert cold_c == ("face:bottom:frac=0.08",)
-    hot_v, cold_v = specs_from_cli(None, None, "convection", 0.5)
-    assert hot_v == ()
-    assert cold_v == ()
+    assert specs_from_cli(None, None) == ((), ())
 
 
 def test_conduction_volume_source_solid_cools_better():
-    params = default_2d(nx=16, ny=16, heat_mode="conduction", filter_iters=40, heat_iters=300)
+    params = conduction_tree(nx=16, ny=16, filter_iters=40, heat_iters=300)
     assert params.uses_volume_source
-    assert params.cold_specs == ("face:bottom:frac=0.08",)
+    assert params.cold_specs == TREE_SINK
     solid = jnp.ones(params.n)
     fluid = jnp.zeros(params.n)
     js, aux_s = analyze(solid, 8.0, params)
@@ -52,9 +46,7 @@ def test_conduction_volume_source_solid_cools_better():
 
 
 def test_convection_ports_and_flow_cools():
-    params = default_2d(
-        nx=16, ny=16, heat_mode="convection", flow_model="darcy", flow_iters=200, heat_iters=250, filter_iters=40
-    )
+    params = convection_darcy(nx=16, ny=16, flow_iters=200, heat_iters=250, filter_iters=40)
     solid = jnp.ones(params.n)
     fluid = jnp.zeros(params.n)
     np.testing.assert_allclose(conductivity(solid, params), conductivity(fluid, params))
@@ -69,13 +61,17 @@ def test_convection_ports_and_flow_cools():
     u_left = np.asarray(aux_f["face_vel"][0][0])
     assert float(np.max(np.abs(u_left * (1.0 - mask)))) < 1e-8
     assert float(np.sum(u_left * mask)) > 0.05
+    assert params.cold_specs == ()
+    assert params.hot_specs == ()
+    assert bool(mask[len(mask) // 2])
+    assert not bool(mask[0]) and not bool(mask[-1])
 
 
 def test_darcy_open_channel_is_divergence_free():
     from topoopt.darcy import solve_darcy
     from topoopt.grid import cell_divergence, port_mask
 
-    params = default_2d(nx=16, ny=16, flow_model="darcy", flow_iters=250, filter_iters=20)
+    params = convection_darcy(nx=16, ny=16, flow_iters=250, filter_iters=20)
     faces, _p = solve_darcy(jnp.zeros(params.n), params)
     mask = port_mask(params)
     div = cell_divergence(faces, params.dx)
@@ -91,8 +87,14 @@ def test_stokes_pressure_ports_channel_beats_block():
     from topoopt.grid import cell_divergence, port_mask
     from topoopt.heat import solve_energy
 
-    params = default_2d(
-        nx=16, ny=16, heat_mode="both", flow_model="stokes", flow_iters=80, uzawa_iters=300, heat_iters=250
+    params = convection_darcy(
+        nx=16,
+        ny=16,
+        flow_model="stokes",
+        flow_iters=80,
+        uzawa_iters=40,
+        stokes_kryl_iters=200,
+        heat_iters=250,
     )
     mask = port_mask(params)
     y = (jnp.arange(params.n[1]) + 0.5) / params.n[1]
@@ -113,28 +115,28 @@ def test_stokes_pressure_ports_channel_beats_block():
     u_open, out_open, div_o, rel_o, t_open = _flow(jnp.zeros(params.n))
     u_ch, out_ch, div_c, rel_c, t_ch = _flow(channel)
     u_blk, out_blk, div_b, rel_b, t_blk = _flow(jnp.ones(params.n))
-    assert rel_o < 0.08 and rel_c < 0.10
-    assert u_open > 0.5 and abs(u_open - out_open) / u_open < 0.08
-    assert u_ch > 0.2 and abs(u_ch - out_ch) / u_ch < 0.10
+    assert rel_o < 2e-3 and rel_c < 2e-3
+    assert u_open > 0.5 and abs(u_open - out_open) / u_open < 0.03
+    assert u_ch > 0.2 and abs(u_ch - out_ch) / u_ch < 0.05
     assert u_blk < 0.05 * u_open
-    assert div_o < 5e-3 and div_c < 2e-2
+    assert div_o < 2e-3 and div_c < 5e-3
     assert t_open < t_blk and t_ch < t_blk
+    assert params.cold_specs == () and params.hot_specs == ()
 
 
 def test_both_mode_has_flow_and_conduction_contrast():
-    params = default_2d(
-        nx=16, ny=16, heat_mode="both", flow_model="darcy", flow_iters=200, heat_iters=250, filter_iters=40
-    )
+    params = conjugate_darcy(nx=16, ny=16, flow_iters=200, heat_iters=250, filter_iters=40)
     gray = jnp.full(params.n, 0.45)
     j, aux = analyze(gray, 2.0, params)
     assert np.isfinite(float(j))
     assert float(aux["speed"].max()) > 0.0
     assert conductivity(jnp.ones(params.n), params).mean() > conductivity(jnp.zeros(params.n), params).mean()
     assert float(aux["T"].min()) >= -1e-8
+    assert params.cold_specs == () and params.hot_specs == ()
 
 
 def test_custom_faces_hot_top_cold_bottom():
-    params = default_2d(
+    params = params2d(
         nx=16,
         ny=16,
         heat_mode="conduction",
@@ -152,7 +154,7 @@ def test_custom_faces_hot_top_cold_bottom():
 
 
 def test_custom_box_domains():
-    params = default_2d(
+    params = params2d(
         nx=16,
         ny=16,
         heat_mode="conduction",
@@ -168,8 +170,35 @@ def test_custom_box_domains():
     assert temp[5:11, 0:3].mean() > temp[0:3, 10:16].mean()
 
 
+def test_flow_modes_only_centerline_ports():
+    """Convection / both: one left inlet, one right outlet, no cold patches."""
+    from topoopt.grid import port_mask
+
+    factories = (
+        convection_darcy,
+        conjugate_darcy,
+        lambda **kw: conjugate_stokes(uzawa_iters=20, stokes_kryl_iters=80, **kw),
+    )
+    for factory in factories:
+        params = factory(nx=16, ny=16, flow_iters=80, heat_iters=80, filter_iters=20)
+        assert params.hot_specs == ()
+        assert params.cold_specs == ()
+        mask = np.asarray(port_mask(params))
+        assert bool(mask[len(mask) // 2])
+        assert not bool(mask[0]) and not bool(mask[-1])
+        j, aux = analyze(jnp.zeros(params.n), 2.0, params)
+        assert np.isfinite(float(j))
+        u_left = np.asarray(aux["face_vel"][0][0])
+        u_right = np.asarray(aux["face_vel"][0][-1])
+        v = np.asarray(aux["face_vel"][1])
+        assert float(np.max(np.abs(u_left * (1.0 - mask)))) < 1e-8
+        assert float(np.max(np.abs(u_right * (1.0 - mask)))) < 1e-8
+        assert float(np.max(np.abs(v[:, 0]))) < 1e-8
+        assert float(np.max(np.abs(v[:, -1]))) < 1e-8
+
+
 def test_conduction_energy_residual_small():
-    params = default_2d(nx=12, ny=12, heat_mode="conduction", heat_iters=400, filter_iters=30)
+    params = conduction_tree(nx=12, ny=12, heat_iters=400, filter_iters=30)
     gamma = jnp.full(params.n, 0.5)
     from topoopt.grid import zero_face_velocity
 

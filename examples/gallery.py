@@ -1,41 +1,61 @@
-"""Run a 2-D gallery covering every heat mode, flow model, and region type."""
+"""Fine-mesh gallery of the named cases in ``examples/problems.py``."""
 
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
-from topoopt.config import default_2d
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from examples.problems import (
+    conduction_tree,
+    conjugate_darcy,
+    conjugate_stokes,
+    convection_darcy,
+    custom_boxes,
+    custom_faces,
+)
 from topoopt.optimize import optimize
+from topoopt.symmetry import max_error
 from topoopt.viz import plot_2d, write_vtk
 
 
-def _cases():
-    # Fine mesh + long β continuation so conduction can grow a branching tree.
-    # rmin is in cells; on 80×80 that is a much thinner physical filter than 32×32.
-    common = dict(nx=80, ny=80, rmin=2.0, filter_iters=200, heat_iters=400, flow_iters=280)
-    return [
-        (
-            "2d_conduction",
-            default_2d(
-                **common,
-                heat_mode="conduction",
-                vol_frac=0.30,
-                rmin=1.5,
-                cold_specs=("face:bottom:frac=0.08",),
+def _cases(quick=False):
+    if quick:
+        coarse = dict(filter_iters=40, heat_iters=150, flow_iters=80)
+        return [
+            ("2d_conduction", conduction_tree(nx=16, ny=16, rmin=1.5, **coarse), 8),
+            ("2d_convection_darcy", convection_darcy(nx=16, ny=16, **coarse), 8),
+            ("2d_both_darcy", conjugate_darcy(nx=16, ny=16, **coarse), 8),
+            (
+                "2d_both_stokes",
+                conjugate_stokes(
+                    nx=12,
+                    ny=12,
+                    rmin=2.0,
+                    filter_iters=40,
+                    heat_iters=80,
+                    flow_iters=40,
+                    uzawa_iters=20,
+                    stokes_kryl_iters=40,
+                ),
+                4,
             ),
-            200,
-        ),
-        ("2d_convection_darcy", default_2d(**common, heat_mode="convection", flow_model="darcy"), 150),
-        ("2d_both_darcy", default_2d(**common, heat_mode="both", flow_model="darcy"), 150),
+            ("2d_custom_faces", custom_faces(nx=16, ny=16, **coarse), 8),
+            ("2d_custom_boxes", custom_boxes(nx=16, ny=16, **coarse), 8),
+        ]
+    fine = dict(filter_iters=200, heat_iters=400, flow_iters=280)
+    return [
+        ("2d_conduction", conduction_tree(nx=80, ny=80, rmin=1.5, **fine), 200),
+        ("2d_convection_darcy", convection_darcy(nx=80, ny=80, **fine), 150),
+        ("2d_both_darcy", conjugate_darcy(nx=80, ny=80, **fine), 150),
         (
             "2d_both_stokes",
-            default_2d(
+            conjugate_stokes(
                 nx=48,
                 ny=48,
                 rmin=2.0,
-                heat_mode="both",
-                flow_model="stokes",
                 filter_iters=120,
                 heat_iters=320,
                 flow_iters=250,
@@ -43,36 +63,16 @@ def _cases():
             ),
             100,
         ),
-        (
-            "2d_custom_faces",
-            default_2d(
-                **common,
-                heat_mode="conduction",
-                q_vol=0.0,
-                hot_specs=("face:top:frac=0.5",),
-                cold_specs=("face:bottom:frac=0.5",),
-            ),
-            180,
-        ),
-        (
-            "2d_custom_boxes",
-            default_2d(
-                **common,
-                heat_mode="conduction",
-                q_vol=0.0,
-                hot_specs=("box:0.2,0.8,0.0,0.18",),
-                cold_specs=("box:0.0,0.18,0.25,0.75", "face:left"),
-            ),
-            180,
-        ),
+        ("2d_custom_faces", custom_faces(nx=80, ny=80, **fine), 180),
+        ("2d_custom_boxes", custom_boxes(nx=80, ny=80, **fine), 180),
     ]
 
 
-def run_examples(root: str | Path = "outputs/examples"):
+def run_examples(root: str | Path = "outputs", quick: bool = False):
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     records = []
-    for name, params, iters in _cases():
+    for name, params, iters in _cases(quick=quick):
         out = root / name
         out.mkdir(parents=True, exist_ok=True)
 
@@ -102,6 +102,8 @@ def run_examples(root: str | Path = "outputs/examples"):
             "speed_max": float(aux["speed"].max()),
             "hot": list(params.hot_specs),
             "cold": list(params.cold_specs),
+            "symmetry": list(params.symmetry),
+            "sym_err": float(max_error(_g, params)),
             "history": [{"iter": h["iter"], "J": h["J"], "vol": h["vol"]} for h in hist],
             "outdir": str(out),
         }
@@ -125,9 +127,14 @@ def main(argv=None):
     import argparse
 
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--outdir", default="outputs/examples")
+    p.add_argument("--outdir", default="outputs")
+    p.add_argument(
+        "--quick",
+        action="store_true",
+        help="Coarse mesh and few iterations (not a publishable gallery)",
+    )
     args = p.parse_args(argv)
-    run_examples(args.outdir)
+    run_examples(args.outdir, quick=args.quick)
 
 
 if __name__ == "__main__":

@@ -7,8 +7,8 @@ Spec strings (repeatable via ``--hot`` / ``--cold``):
 - ``face:bottom:frac=0.4:center=0.3`` — off-center patch
 - ``box:xmin,xmax,ymin,ymax`` — volumetric domain
 
-Defaults depend on ``heat_mode``: conduction uses a centered bottom sink;
-convection / both use a uniform volume source and flow ports (no extra faces).
+The package does not pick default patches. Research cases set
+``hot_specs`` / ``cold_specs`` in ``examples/problems.py``.
 """
 
 from __future__ import annotations
@@ -253,12 +253,10 @@ def add_region_arguments(parser) -> None:
     )
 
 
-def specs_from_cli(hot, cold, heat_mode: str = "both", port_frac: float = 0.5) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    from topoopt.config import default_regions
-
-    hot_d, cold_d = default_regions(heat_mode, port_frac)
-    hot_specs = tuple(hot) if hot else hot_d
-    cold_specs = tuple(cold) if cold else cold_d
+def specs_from_cli(hot, cold) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Parse CLI ``--hot`` / ``--cold`` lists. Missing lists become empty."""
+    hot_specs = tuple(hot) if hot else ()
+    cold_specs = tuple(cold) if cold else ()
     for spec in (*hot_specs, *cold_specs):
         parse_spec(spec)
     return hot_specs, cold_specs

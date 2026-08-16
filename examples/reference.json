@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "note": "Short-run archive for CI. J bands are loose so jax/cpu drift does not fail the suite. Full gallery numbers live in outputs/report.json after examples/gallery.py.",
+  "cases": {
+    "conduction_tree": {
+      "factory": "examples.problems:conduction_tree",
+      "symmetry": ["x"],
+      "vol_frac": 0.3,
+      "heat_mode": "conduction",
+      "solves_flow": false,
+      "j_direction": "maximize_-mean_T",
+      "short": {
+        "nx": 16,
+        "ny": 16,
+        "iters": 8,
+        "beta_max": 4.0,
+        "lr": 0.2,
+        "heat_iters": 250,
+        "filter_iters": 40,
+        "j_best_min": -0.25,
+        "j_best_max": 0.0,
+        "sym_err_max": 1e-12
+      }
+    },
+    "convection_darcy": {
+      "factory": "examples.problems:convection_darcy",
+      "symmetry": ["y"],
+      "vol_frac": 0.45,
+      "heat_mode": "convection",
+      "solves_flow": true,
+      "j_direction": "maximize_-mean_T",
+      "short": {
+        "nx": 12,
+        "ny": 12,
+        "iters": 6,
+        "beta_max": 4.0,
+        "lr": 0.2,
+        "flow_iters": 120,
+        "heat_iters": 200,
+        "filter_iters": 30,
+        "j_best_min": -2.0,
+        "j_best_max": 0.0,
+        "sym_err_max": 1e-12
+      }
+    },
+    "custom_faces": {
+      "factory": "examples.problems:custom_faces",
+      "symmetry": ["x"],
+      "vol_frac": 0.4,
+      "heat_mode": "conduction",
+      "solves_flow": false,
+      "j_direction": "maximize_Q_hot",
+      "short": {
+        "nx": 12,
+        "ny": 12,
+        "iters": 6,
+        "beta_max": 4.0,
+        "lr": 0.2,
+        "heat_iters": 200,
+        "filter_iters": 30,
+        "j_best_min": 0.0,
+        "j_best_max": 50.0,
+        "sym_err_max": 1e-12
+      }
+    },
+    "custom_boxes": {
+      "factory": "examples.problems:custom_boxes",
+      "symmetry": [],
+      "vol_frac": 0.4,
+      "heat_mode": "conduction",
+      "solves_flow": false,
+      "j_direction": "maximize_Q_hot"
+    }
+  }
+}

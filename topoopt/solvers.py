@@ -118,6 +118,28 @@ def implicit_spd_solve(
     return jax.lax.custom_linear_solve(matvec, b, solve, solve, symmetric=True)
 
 
+def iterative_spd_solve(
+    matvec: MatVec,
+    b: Tree,
+    diag: Tree,
+    niter: int = 400,
+    tol: float = 1e-8,
+) -> Tree:
+    """Forward-only Jacobi-preconditioned CG (no implicit adjoint)."""
+    return _run_pcg_capped(matvec, b, diag, niter, tol)
+
+
+def iterative_nonsym_solve(
+    matvec: MatVec,
+    b: Tree,
+    diag: Tree,
+    niter: int = 400,
+    tol: float = 1e-8,
+) -> Tree:
+    """Forward-only Jacobi-preconditioned BiCGSTAB (no implicit adjoint)."""
+    return _run_bicgstab_capped(matvec, b, diag, niter, tol)
+
+
 def implicit_nonsym_solve(
     matvec: MatVec,
     b: Tree,

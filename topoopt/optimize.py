@@ -14,6 +14,9 @@ import numpy as np
 from topoopt.config import ColdPlateParams
 from topoopt.grid import port_mask
 from topoopt.problem import analyze, physical_density
+from topoopt.symmetry import apply as apply_symmetry
+from topoopt.symmetry import axes as symmetry_axes
+from topoopt.symmetry import max_error as symmetry_error
 
 _DIAG_KEYS = (
     "energy_rms",
@@ -27,6 +30,10 @@ _DIAG_KEYS = (
     "u_in",
     "u_out",
 )
+
+
+class RunawaySolveError(RuntimeError):
+    """Energy / temperature blew up, usually a sealed flow design."""
 
 
 def project_physical_volume(gamma_raw, beta, params: ColdPlateParams, target):
@@ -53,6 +60,14 @@ def keep_ports_open(gamma, params: ColdPlateParams):
     mask = port_mask(params)
     gamma = gamma.at[0, :].set(jnp.where(mask, 0.0, gamma[0, :]))
     return gamma.at[-1, :].set(jnp.where(mask, 0.0, gamma[-1, :]))
+
+
+def project_design(gamma, beta, params: ColdPlateParams):
+    """Symmetry → volume equality → Stokes port pin → symmetry."""
+    gamma = apply_symmetry(jnp.clip(gamma, 0.0, 1.0), params)
+    gamma = project_physical_volume(gamma, beta, params, params.vol_frac)
+    gamma = keep_ports_open(gamma, params)
+    return apply_symmetry(gamma, params)
 
 
 def projected_step(gamma, grad, move: float):
@@ -84,21 +99,40 @@ def beta_schedule(n_iters: int, beta_max: float) -> jnp.ndarray:
     return jnp.array(sched[:n_iters])
 
 
-def optimize(
-    params: ColdPlateParams,
-    n_iters: int = 80,
-    lr: float = 0.2,
-    beta_max: float = 32.0,
-    seed: int = 0,
-    outdir: str | Path = "outputs",
-    callback=None,
-):
-    """Maximize J (cooler mean T, or heat leaving hot patches) at fixed solid volume."""
-    outdir = Path(outdir)
-    outdir.mkdir(parents=True, exist_ok=True)
+def upsample_field(field, new_n: tuple[int, int]):
+    """Bilinear resize of a cell-centered field onto ``new_n``."""
+    field = jnp.asarray(field)
+    if tuple(field.shape) == tuple(new_n):
+        return field
+    return jax.image.resize(field.astype(jnp.float64), new_n, method="linear")
 
+
+def runaway_reason(rec: dict, params: ColdPlateParams) -> str | None:
+    """Why a flow solve should abort. ``None`` if the fields still look sane."""
+    t_max = rec.get("T_max", float("nan"))
+    t_mean = rec.get("T_mean", float("nan"))
+    heat = rec.get("J", float("nan"))
+    if not (math.isfinite(float(t_max)) and math.isfinite(float(t_mean)) and math.isfinite(float(heat))):
+        return "non-finite temperature or objective"
+    if float(t_max) > 1e3:
+        return f"T_max={float(t_max):.3e} > 1e3"
+    if params.solves_flow and float(rec.get("energy_rms", 0.0)) > 1e-2 and float(t_max) > 50.0:
+        return (
+            f"energy_rms={float(rec['energy_rms']):.3e} and T_max={float(t_max):.3g} "
+            "(likely blocked flow; no conduction sink on flow modes)"
+        )
+    return None
+
+
+def _initial_guess(params: ColdPlateParams, seed: int, start_gamma):
+    if start_gamma is not None:
+        guess = jnp.asarray(start_gamma)
+        if tuple(guess.shape) != tuple(params.n):
+            raise ValueError(f"start_gamma shape {tuple(guess.shape)} != params.n {params.n}")
+        return jnp.clip(guess, 0.0, 1.0)
     key = jax.random.PRNGKey(seed)
     noise = 0.08 * (jax.random.uniform(key, params.n) - 0.5)
+    noise = apply_symmetry(noise, params)
     guess = params.vol_frac + noise
     if params.solves_flow:
         # Start from an open mid-height duct. Volume-preserving GD from a
@@ -109,10 +143,32 @@ def optimize(
         y0 = 0.5 * (1.0 - params.port_frac)
         y1 = 0.5 * (1.0 + params.port_frac)
         guess = jnp.where((y > y0) & (y < y1), 0.08, 0.78) + noise
-    gamma = keep_ports_open(
-        project_physical_volume(jnp.clip(guess, 0.0, 1.0), 1.0, params, params.vol_frac),
-        params,
-    )
+    return jnp.clip(guess, 0.0, 1.0)
+
+
+def optimize(
+    params: ColdPlateParams,
+    n_iters: int = 80,
+    lr: float = 0.2,
+    beta_max: float = 32.0,
+    seed: int = 0,
+    outdir: str | Path = "outputs",
+    callback=None,
+    start_gamma=None,
+    abort_on_runaway: bool = True,
+    stall_iters: int = 8,
+):
+    """Maximize J (cooler mean T, or heat leaving hot patches) at fixed solid volume.
+
+    Random init noise is symmetrized when ``params.symmetry`` is set, and
+    every accepted design is projected onto that mirror. Without that
+    projection a left–right or top–bottom problem grows a skewed design
+    from asymmetric noise even though the PDEs and BCs are symmetric.
+    """
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    gamma = project_design(_initial_guess(params, seed, start_gamma), 1.0, params)
     betas = beta_schedule(n_iters, beta_max)
 
     def loss_fn(g, beta):
@@ -122,11 +178,12 @@ def optimize(
     value_and_grad = jax.jit(jax.value_and_grad(loss_fn, has_aux=True))
 
     history = []
+    sym = ",".join(symmetry_axes(params)) or "none"
     print(
         f"2-D box  n={params.n}  L={params.L}  heat={params.heat_mode} "
         f"({params.heat_label})  flow={params.flow_model if params.solves_flow else 'none'}  "
         f"Pe={params.effective_pe:g}  q={params.q_vol:g}  port={params.port_frac:g}  "
-        f"vol*={params.vol_frac}\n"
+        f"vol*={params.vol_frac}  symmetry={sym}\n"
         f"  hot={params.hot_specs}  cold={params.cold_specs}"
     )
     print(
@@ -139,16 +196,14 @@ def optimize(
     best_iter = 0
     best_gamma = gamma
     best_aux = None
+    stopped = "completed"
     for it in range(1, n_iters + 1):
         beta = float(betas[it - 1])
         t0 = time.time()
-        gamma = keep_ports_open(project_physical_volume(gamma, beta, params, params.vol_frac), params)
+        gamma = project_design(gamma, beta, params)
         (loss, (heat, aux)), grad = value_and_grad(gamma, beta)
         move = move_limit(lr, beta)
-        gamma_next = keep_ports_open(
-            project_physical_volume(projected_step(gamma, grad, move), beta, params, params.vol_frac),
-            params,
-        )
+        gamma_next = project_design(projected_step(gamma, grad, move), beta, params)
         vol = float(aux["V"])
         dt = time.time() - t0
         rec = {
@@ -159,6 +214,7 @@ def optimize(
             "vol": vol,
             "move": move,
             "time": dt,
+            "sym_err": float(symmetry_error(gamma, params)),
         }
         for key in _DIAG_KEYS:
             rec[key] = float(aux[key])
@@ -183,13 +239,119 @@ def optimize(
             callback(it, gamma, aux, rec)
         if it == 1 or it == n_iters or it % 10 == 0:
             _save_checkpoint(outdir, it, gamma, aux, params)
+        reason = runaway_reason(rec, params) if abort_on_runaway else None
+        if reason:
+            stopped = "runaway"
+            _finalize_run(
+                outdir,
+                params,
+                n_iters=n_iters,
+                lr=lr,
+                beta_max=beta_max,
+                seed=seed,
+                history=history,
+                best_J=best_J,
+                best_iter=best_iter,
+                gamma=gamma,
+                aux=aux,
+                best_gamma=best_gamma,
+                best_aux=best_aux,
+                stopped=stopped,
+                start_gamma=start_gamma is not None,
+                stall_iters=stall_iters,
+            )
+            raise RunawaySolveError(
+                f"blocked or runaway solve at iter {it}: {reason}. "
+                f"Best-J design (iter {best_iter}) was written to {outdir}. "
+                "Flow modes have no extra cold patch; do not add one — fix the design."
+            )
+        if (
+            stall_iters
+            and beta >= float(beta_max) - 1e-12
+            and (it - best_iter) >= stall_iters
+        ):
+            stopped = "stall"
+            print(f"  stop: no J improvement for {stall_iters} iters at β={beta:g}")
+            break
         gamma = gamma_next
 
+    _finalize_run(
+        outdir,
+        params,
+        n_iters=n_iters,
+        lr=lr,
+        beta_max=beta_max,
+        seed=seed,
+        history=history,
+        best_J=best_J,
+        best_iter=best_iter,
+        gamma=gamma,
+        aux=aux,
+        best_gamma=best_gamma,
+        best_aux=best_aux,
+        stopped=stopped,
+        start_gamma=start_gamma is not None,
+        stall_iters=stall_iters,
+    )
+    return best_gamma, best_aux, history
+
+
+def optimize_hierarchy(params: ColdPlateParams, levels, **opt_kw):
+    """Coarse-to-fine continuation. ``levels`` is ``((nx, ny, n_iters), ...)``."""
+    levels = list(levels)
+    if not levels:
+        raise ValueError("levels must contain at least one (nx, ny, n_iters)")
+    gamma = opt_kw.pop("start_gamma", None)
+    outdir = Path(opt_kw.pop("outdir", "outputs"))
+    last = None
+    for i, (nx, ny, nit) in enumerate(levels):
+        level_params = params._replace(n=(int(nx), int(ny)))
+        if gamma is not None and tuple(gamma.shape) != tuple(level_params.n):
+            gamma = upsample_field(gamma, level_params.n)
+        last = optimize(
+            level_params,
+            n_iters=int(nit),
+            start_gamma=gamma,
+            outdir=outdir / f"level_{i}_{nx}x{ny}",
+            **opt_kw,
+        )
+        gamma = last[0]
+    return last
+
+
+def _params_json(params: ColdPlateParams) -> dict:
+    out = {}
+    for key, val in params._asdict().items():
+        out[key] = list(val) if isinstance(val, tuple) else val
+    return out
+
+
+def _finalize_run(
+    outdir: Path,
+    params: ColdPlateParams,
+    *,
+    n_iters,
+    lr,
+    beta_max,
+    seed,
+    history,
+    best_J,
+    best_iter,
+    gamma,
+    aux,
+    best_gamma,
+    best_aux,
+    stopped,
+    start_gamma,
+    stall_iters,
+):
     for rec in history:
         rec["is_best"] = rec["iter"] == best_iter
     (outdir / "history.json").write_text(json.dumps(history, indent=2))
-    _save_checkpoint(outdir, "final", gamma, aux, params)
-    _save_checkpoint(outdir, "best", best_gamma, best_aux, params)
+    if aux is not None:
+        _save_checkpoint(outdir, "final", gamma, aux, params)
+    if best_aux is not None:
+        _save_checkpoint(outdir, "best", best_gamma, best_aux, params)
     _write_run_json(
         outdir,
         params,
@@ -200,15 +362,10 @@ def optimize(
         history=history,
         best_J=best_J,
         best_iter=best_iter,
+        stopped=stopped,
+        start_gamma=start_gamma,
+        stall_iters=stall_iters,
     )
-    return best_gamma, best_aux, history
-
-
-def _params_json(params: ColdPlateParams) -> dict:
-    out = {}
-    for key, val in params._asdict().items():
-        out[key] = list(val) if isinstance(val, tuple) else val
-    return out
 
 
 def _write_run_json(outdir: Path, params: ColdPlateParams, **meta):
@@ -220,6 +377,9 @@ def _write_run_json(outdir: Path, params: ColdPlateParams, **meta):
         "lr": meta["lr"],
         "beta_max": meta["beta_max"],
         "seed": meta["seed"],
+        "stopped": meta.get("stopped", "completed"),
+        "start_gamma": meta.get("start_gamma", False),
+        "stall_iters": meta.get("stall_iters", 8),
         "J0": history[0]["J"],
         "J_final": last["J"],
         "J_best": meta["best_J"],
@@ -235,6 +395,7 @@ def _write_run_json(outdir: Path, params: ColdPlateParams, **meta):
         "speed_max": last["speed_max"],
         "u_in": last["u_in"],
         "u_out": last["u_out"],
+        "sym_err": last.get("sym_err", 0.0),
     }
     (outdir / "run.json").write_text(json.dumps(payload, indent=2))
 

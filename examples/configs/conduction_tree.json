@@ -1,0 +1,6 @@
+{
+  "comment": "Volume-to-point conduction tree. Symmetric across x (centered bottom sink).",
+  "factory": "examples.problems:conduction_tree",
+  "nx": 40,
+  "ny": 40
+}

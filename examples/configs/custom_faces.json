@@ -1,0 +1,6 @@
+{
+  "comment": "Hot-top / cold-bottom sandwich. Symmetric across x.",
+  "factory": "examples.problems:custom_faces",
+  "nx": 40,
+  "ny": 40
+}

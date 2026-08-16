@@ -8,7 +8,8 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 
-from topoopt.config import HEAT_MODES, default_2d
+from examples.problems import conduction_tree, conjugate_darcy, conjugate_stokes, convection_darcy, custom_faces
+from topoopt.config import HEAT_MODES, params2d
 from topoopt.optimize import optimize
 from topoopt.problem import analyze
 from topoopt.viz import plot_2d, write_vtk
@@ -23,7 +24,7 @@ def _check_temperature(aux, lo=-0.02):
 
 def physics_report():
     rows = []
-    params_c = default_2d(nx=16, ny=16, heat_mode="conduction", heat_iters=250, filter_iters=40)
+    params_c = conduction_tree(nx=16, ny=16, heat_iters=250, filter_iters=40)
     js, aux_s = analyze(jnp.ones(params_c.n), 8.0, params_c)
     jf, aux_f = analyze(jnp.zeros(params_c.n), 8.0, params_c)
     _check_temperature(aux_s)
@@ -43,7 +44,7 @@ def physics_report():
     from topoopt.darcy import solve_darcy
     from topoopt.grid import cell_divergence, port_mask
 
-    params_d = default_2d(nx=16, ny=16, flow_model="darcy", flow_iters=250)
+    params_d = convection_darcy(nx=16, ny=16, flow_iters=250)
     faces, _p = solve_darcy(jnp.zeros(params_d.n), params_d)
     mask = np.asarray(port_mask(params_d))
     div_rms = float(jnp.sqrt(jnp.mean(cell_divergence(faces, params_d.dx) ** 2)))
@@ -61,17 +62,16 @@ def physics_report():
         }
     )
 
-    params_v = default_2d(
-        nx=16, ny=16, heat_mode="convection", flow_model="darcy", flow_iters=200, heat_iters=250, filter_iters=40
-    )
+    params_v = convection_darcy(nx=16, ny=16, flow_iters=200, heat_iters=250, filter_iters=40)
     jopen, aux_o = analyze(jnp.zeros(params_v.n), 2.0, params_v)
     jblk, aux_b = analyze(jnp.ones(params_v.n), 2.0, params_v)
     _check_temperature(aux_o)
     assert float(aux_o["speed"].mean()) > float(aux_b["speed"].mean())
     assert float(jopen) > float(jblk)
+    assert params_v.cold_specs == () and params_v.hot_specs == ()
     rows.append(
         {
-            "check": "convection open channel cooler than blocked",
+            "check": "convection open channel cooler than blocked (centerline ports only)",
             "ok": True,
             "Tmean_open": float(aux_o["T"].mean()),
             "Tmean_blocked": float(aux_b["T"].mean()),
@@ -79,15 +79,13 @@ def physics_report():
         }
     )
 
-    params_b = default_2d(
-        nx=16, ny=16, heat_mode="both", flow_model="darcy", flow_iters=200, heat_iters=250, filter_iters=40
-    )
+    params_b = conjugate_darcy(nx=16, ny=16, flow_iters=200, heat_iters=250, filter_iters=40)
     j, aux = analyze(jnp.full(params_b.n, 0.45), 2.0, params_b)
     tmin, tmax = _check_temperature(aux)
     assert float(aux["speed"].max()) > 0.0 and np.isfinite(float(j))
     rows.append({"check": "conjugate has flow and finite J", "ok": True, "J": float(j), "T_range": [tmin, tmax]})
 
-    params_r = default_2d(
+    params_r = params2d(
         nx=16,
         ny=16,
         heat_mode="conduction",
@@ -138,33 +136,25 @@ def _run_case(name, params, iters, outdir, plot):
     return rec
 
 
-def run_all(root: str | Path = "outputs/verify"):
+def run_all(root: str | Path = "outputs"):
     root = Path(root)
     physics = physics_report()
     cases = []
+    factories = {
+        "conduction": conduction_tree,
+        "convection": convection_darcy,
+        "both": conjugate_darcy,
+    }
     for mode in HEAT_MODES:
-        params = default_2d(
-            nx=20, ny=20, heat_mode=mode, flow_model="darcy", filter_iters=50, heat_iters=250, flow_iters=180
-        )
+        params = factories[mode](nx=20, ny=20, filter_iters=50, heat_iters=250, flow_iters=180)
         cases.append(_run_case(f"2d_{mode}", params, 6, root / f"2d_{mode}", plot_2d))
 
-    custom = default_2d(
-        nx=20,
-        ny=20,
-        heat_mode="conduction",
-        q_vol=0.0,
-        filter_iters=50,
-        heat_iters=250,
-        hot_specs=("face:bottom:frac=0.5", "box:0.35,0.65,0.0,0.15"),
-        cold_specs=("face:left", "face:top:frac=0.35"),
-    )
+    custom = custom_faces(nx=20, ny=20, filter_iters=50, heat_iters=250)
     cases.append(_run_case("2d_custom_regions", custom, 6, root / "2d_custom_regions", plot_2d))
 
-    stokes = default_2d(
+    stokes = conjugate_stokes(
         nx=16,
         ny=16,
-        heat_mode="both",
-        flow_model="stokes",
         filter_iters=40,
         heat_iters=200,
         flow_iters=200,
@@ -191,7 +181,7 @@ def main(argv=None):
     import argparse
 
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--outdir", default="outputs/verify")
+    p.add_argument("--outdir", default="outputs")
     args = p.parse_args(argv)
     run_all(args.outdir)
 

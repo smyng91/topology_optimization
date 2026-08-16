@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "topoopt"
-version = "0.2.0"
+version = "0.4.0"
 description = "JAX topology optimization of a 2-D heated box"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -17,6 +17,9 @@ dependencies = [
 
 [project.optional-dependencies]
 cpu = ["jax[cpu]"]
+cuda = ["jax[cuda12]"]
+gpu = ["jax[cuda12]"]
+yaml = ["pyyaml>=6"]
 dev = ["pytest>=8"]
 
 [project.scripts]

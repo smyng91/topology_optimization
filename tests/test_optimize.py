@@ -8,13 +8,21 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from topoopt.config import default_2d
-from topoopt.optimize import beta_schedule, move_limit, optimize
+from examples.problems import conduction_tree, convection_darcy
+from topoopt.optimize import (
+    RunawaySolveError,
+    beta_schedule,
+    move_limit,
+    optimize,
+    optimize_hierarchy,
+    runaway_reason,
+)
 from topoopt.problem import analyze
+from topoopt.symmetry import max_error
 
 
 def test_analyze_diagnostics_conduction():
-    params = default_2d(nx=12, ny=12, heat_mode="conduction", heat_iters=400, filter_iters=30)
+    params = conduction_tree(nx=12, ny=12, heat_iters=400, filter_iters=30)
     gamma = jnp.full(params.n, 0.5)
     j, aux = analyze(gamma, 4.0, params)
     assert np.isfinite(float(j))
@@ -44,7 +52,7 @@ def test_beta_schedule_doubles_to_max():
 
 
 def test_short_conduction_optimize(tmp_path):
-    params = default_2d(nx=16, ny=16, heat_mode="conduction", filter_iters=40, heat_iters=250)
+    params = conduction_tree(nx=16, ny=16, filter_iters=40, heat_iters=250)
     _g, aux, hist = optimize(
         params, n_iters=10, lr=0.2, beta_max=4.0, seed=0, outdir=tmp_path
     )
@@ -62,18 +70,13 @@ def test_short_conduction_optimize(tmp_path):
     assert isinstance(run["params"]["n"], list)
     assert np.isfinite(float(aux["energy_rms"]))
     assert sum(h["is_best"] for h in hist) == 1
+    assert float(max_error(_g, params)) < 1e-12
+    assert run["stopped"] == "completed"
+    assert run["params"]["symmetry"] == ["x"]
 
 
 def test_short_darcy_optimize(tmp_path):
-    params = default_2d(
-        nx=12,
-        ny=12,
-        heat_mode="convection",
-        flow_model="darcy",
-        flow_iters=120,
-        heat_iters=200,
-        filter_iters=30,
-    )
+    params = convection_darcy(nx=12, ny=12, flow_iters=120, heat_iters=200, filter_iters=30)
     _g, aux, hist = optimize(
         params, n_iters=8, lr=0.2, beta_max=4.0, seed=0, outdir=tmp_path
     )
@@ -83,3 +86,33 @@ def test_short_darcy_optimize(tmp_path):
     assert j_best > hist[0]["J"] or hist[-1]["T_mean"] < t0
     assert float(aux["u_in"]) > 0.0
     assert (tmp_path / "run.json").is_file()
+    assert float(max_error(_g, params)) < 1e-12
+    run = json.loads((tmp_path / "run.json").read_text())
+    assert run["params"]["symmetry"] == ["y"]
+
+
+def test_runaway_reason_and_hierarchy(tmp_path):
+    params = conduction_tree(nx=16, ny=16, filter_iters=20, heat_iters=80)
+    rec_ok = {"J": -0.1, "T_max": 1.2, "T_mean": 0.4, "energy_rms": 1e-4}
+    assert runaway_reason(rec_ok, params) is None
+    rec_bad = {"J": float("nan"), "T_max": 1.0, "T_mean": 0.4, "energy_rms": 1e-4}
+    assert runaway_reason(rec_bad, params) is not None
+    rec_hot = {"J": -10.0, "T_max": 2e3, "T_mean": 800.0, "energy_rms": 1e-3}
+    assert "T_max" in runaway_reason(rec_hot, params)
+    flow = convection_darcy(nx=8, ny=8)
+    rec_block = {"J": -80.0, "T_max": 80.0, "T_mean": 40.0, "energy_rms": 5e-2}
+    assert "blocked" in runaway_reason(rec_block, flow)
+
+    gamma, _aux, hist = optimize_hierarchy(
+        params,
+        levels=((8, 8, 3), (16, 16, 3)),
+        lr=0.2,
+        beta_max=2.0,
+        seed=0,
+        outdir=tmp_path,
+        stall_iters=0,
+    )
+    assert gamma.shape == (16, 16)
+    assert abs(hist[-1]["vol"] - params.vol_frac) < 1e-2
+    assert float(max_error(gamma, params._replace(n=(16, 16)))) < 1e-12
+    assert RunawaySolveError is RuntimeError or issubclass(RunawaySolveError, RuntimeError)

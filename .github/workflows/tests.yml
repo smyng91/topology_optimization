@@ -17,4 +17,5 @@ jobs:
       - name: Test
         env:
           MPLBACKEND: Agg
+        # CPU pytest only. The 80×80 gallery is not run here.
         run: python -m pytest tests -q

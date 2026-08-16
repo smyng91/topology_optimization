@@ -2,9 +2,10 @@
 
     u = −κ(γ) ∇p,    ∇·u = 0  ⇒  −∇·(κ ∇p) = 0
 
-Centered inlet / outlet *ports* (``port_frac`` of the left / right walls) are
-held at ``p_in`` and 0. The rest of those walls, and the top / bottom, are
-impermeable. Face velocities use the same fluxes as the Poisson residual.
+One inlet on the left-wall centerline and one outlet on the right-wall
+centerline (``port_frac`` of the height) are held at ``p_in`` and 0.
+The rest of those walls, and the top / bottom, are impermeable. Face
+velocities use the same fluxes as the Poisson residual.
 """
 
 from __future__ import annotations
