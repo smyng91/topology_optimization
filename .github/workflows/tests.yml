@@ -20,24 +20,10 @@ jobs:
       - name: Install
         run: pip install -e ".[cpu,dev]"
       - name: Syntax
-        run: python -m compileall -q topoopt tests scripts examples
+        run: python -m compileall -q topoopt tests examples
       - name: Test
         env:
           MPLBACKEND: Agg
         run: python -m pytest tests -q
       - name: Wheel
         run: pip install build && python -m build
-      - name: Artifact classification
-        run: python scripts/classify_artifacts.py
-      - name: Manuscript integrity
-        if: hashFiles('paper/results.json', 'paper/numbers.tex', 'paper/provenance.json') != ''
-        run: python scripts/check_manuscript_integrity.py
-      - name: Bibliography syntax
-        if: hashFiles('paper/references.bib') != ''
-        run: python scripts/check_references.py
-      - name: Compile manuscript
-        if: runner.os == 'Linux' && hashFiles('paper/figures/*.pdf') != ''
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended texlive-science
-          python scripts/compile_paper.py

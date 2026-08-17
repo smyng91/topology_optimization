@@ -1,5 +1,6 @@
 # Manuscript / publication (local only; never pushed)
 paper/
+scripts/
 *.aux
 *.bbl
 *.blg

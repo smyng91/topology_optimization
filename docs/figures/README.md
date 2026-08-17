@@ -1,7 +1,7 @@
 # Reference snapshots
 
 These PNGs are tutorial snapshots, not publication sources. Local
-manuscript figures, when present, come from `scripts/build_manuscript.py`.
+manuscript figures, when present, are not in this repository.
 
 Committed PNGs from `python examples/publish_figures.py` (short meshes,
 not the $`80\times 80`$ gallery). All optimizing snapshots use

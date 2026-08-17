@@ -4,9 +4,13 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "scripts" / "check_manuscript_integrity.py"
+if not SCRIPT.is_file():
+    pytest.skip("manuscript check script is local-only", allow_module_level=True)
+
 SPEC = importlib.util.spec_from_file_location(
     "check_manuscript_integrity",
-    ROOT / "scripts" / "check_manuscript_integrity.py",
+    SCRIPT,
 )
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None

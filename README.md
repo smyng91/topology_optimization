@@ -181,14 +181,8 @@ bisection so `mean(γ̄)` stays at `v*`.
 
 ## Manuscript
 
-Article sources are kept locally and are not in this repository. To
-rebuild them from a local `paper/` tree:
-
-```bash
-MPLBACKEND=Agg python scripts/build_manuscript.py
-python scripts/check_manuscript_integrity.py
-python scripts/compile_paper.py
-```
+Article sources and rebuild scripts are kept locally and are not in
+this repository.
 
 ## Limitations
 
