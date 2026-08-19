@@ -1,4 +1,17 @@
-from topoopt.experiments import case_fingerprint, case_params, fingerprints_match, load_protocol
+from pathlib import Path
+
+import pytest
+
+from topoopt.experiments import (
+    PROTOCOL_PATH,
+    case_fingerprint,
+    case_params,
+    fingerprints_match,
+    load_protocol,
+)
+
+if not PROTOCOL_PATH.is_file():
+    pytest.skip("experiments protocol is local-only", allow_module_level=True)
 
 
 def test_protocol_loads_registered_cases():
