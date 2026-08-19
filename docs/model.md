@@ -17,11 +17,11 @@ Wiki: https://github.com/smyng91/topology_optimization/wiki
 
 | Symbol | Code | Meaning |
 |---|---|---|
-| $`\gamma\in[0,1]`$ | `gamma_raw` | raw design |
+| $`\gamma`$ | `gamma_raw` | raw design in $`[0,1]`$ |
 | $`\tilde{\gamma}`$ | filtered | cone-filtered design (`--filter helmholtz` optional) |
 | $`\bar{\gamma}`$ | `phys` | projected density in the PDEs |
 | $`\beta,\eta`$ | `beta`, `eta` | projection sharpness; threshold $`\eta=0.5`$ |
-| $`r=r_{\min}\min(\Delta x,\Delta y)`$ | `rmin` | filter radius (`rmin` in cells, default $`2.2`$) |
+| $`r`$ | `rmin` | filter radius (`rmin` in cells, default $`2.2`$) |
 | $`k,k_f,k_s,q_k`$ | `k_fluid`, `k_solid`, `q_k` | conductivity and RAMP sharpness |
 | $`\alpha,q_\alpha`$ | `alpha_*`, `q_alpha` | Brinkman drag and Borrvall–Petersson sharpness |
 | $`\kappa,q_\kappa`$ | `kappa_*`, `q_kappa` | Darcy permeability and RAMP sharpness |
@@ -31,9 +31,17 @@ Wiki: https://github.com/smyng91/topology_optimization/wiki
 | $`\mathbf{u},p`$ | `face_vel`, `p` | MAC velocity, cell pressure |
 | $`v^{*}`$ | `vol_frac` | target $`\mathrm{mean}(\bar{\gamma})`$ |
 | $`J`$ | `J` | objective (maximize) |
-| $`\ell=\ell_0/\sqrt{\max(\beta,1)}`$ | `lr` | move limit; `--lr` is $`\ell_0`$ |
+| $`\ell`$ | `lr` | move limit; `--lr` is $`\ell_0`$ |
 | $`\varepsilon`$ | `div_eps` | Stokes continuity regularizer |
 | $`\Delta p,p_{\mathrm{in}}`$ | `stokes_dp`, `p_in` | Stokes / Darcy port pressures |
+
+```math
+r=r_{\min}\min(\Delta x,\Delta y).
+```
+
+```math
+\ell=\ell_0/\sqrt{\max(\beta,1)}.
+```
 
 Solid $`\gamma=1`$: conducting, impermeable. Fluid $`\gamma=0`$: permeable,
 poor conductor (except convection-only, where $`k\equiv k_f`$).
@@ -47,8 +55,10 @@ uniform field is unchanged at the walls:
 ```math
 \tilde{\gamma}_i
 =
-\frac{\sum_j w_{ij}\gamma_j}{\sum_j w_{ij}},
-\qquad
+\frac{\sum_j w_{ij}\gamma_j}{\sum_j w_{ij}}.
+```
+
+```math
 w_{ij}=\max\bigl(0,\,r-\lVert x_i-x_j\rVert\bigr),
 \qquad
 r=r_{\min}\min(\Delta x,\Delta y).
@@ -79,11 +89,21 @@ Conventional Stolpe–Svanberg RAMP interpolation (endpoints exact; $`q=0`$ is l
 \mathrm{RAMP}(x;f_0,f_1,q)=f_0+(f_1-f_0)\,\frac{x}{1+q(1-x)}.
 ```
 
+Borrvall–Petersson Brinkman drag (not ordinary RAMP; small $`q_\alpha`$
+keeps intermediate $`\bar{\gamma}`$ permeable):
+
+```math
+\alpha(\bar{\gamma})
+=
+\alpha_{\min}+(\alpha_{\max}-\alpha_{\min})
+\frac{q_\alpha\bar{\gamma}}{1-\bar{\gamma}+q_\alpha}.
+```
+
 | Property | Map | Default |
 |---|---|---|
 | $`k`$ (conduction / both) | $`\mathrm{RAMP}(\bar{\gamma};k_f,k_s,q_k)`$ | $`k_f=1`$, $`k_s=100`$, $`q_k=1`$ |
 | $`k`$ (convection) | $`k\equiv k_f`$ | $`k_f=1`$ |
-| $`\alpha`$ | $`\alpha_{\min}+(\alpha_{\max}-\alpha_{\min})\dfrac{q_\alpha\bar{\gamma}}{1-\bar{\gamma}+q_\alpha}`$ | $`0`$, $`10^5`$, $`q_\alpha=0.1`$ |
+| $`\alpha`$ | Borrvall–Petersson, above | $`0`$, $`10^5`$, $`q_\alpha=0.1`$ |
 | $`\kappa`$ | $`\mathrm{RAMP}(\bar{\gamma};\kappa_{\max},\kappa_{\min},q_\kappa)`$ | $`1`$, $`10^{-6}`$, $`q_\kappa=0.1`$ |
 
 ## 3. Governing equations
@@ -128,8 +148,10 @@ so a constant $`T`$ stays in the kernel when $`\nabla\cdot\mathbf{u}\neq 0`$.
 ### 3.2 Stokes–Brinkman (`flow_model=stokes`)
 
 ```math
--\nabla^2\mathbf{u}+\alpha(\bar{\gamma})\,\mathbf{u}+\nabla p=\mathbf{0},
-\qquad
+-\nabla^2\mathbf{u}+\alpha(\bar{\gamma})\,\mathbf{u}+\nabla p=\mathbf{0}.
+```
+
+```math
 \nabla\cdot\mathbf{u}=0.
 ```
 
@@ -145,8 +167,10 @@ Throughput is design-dependent. Inlet *velocity* is not prescribed
 ### 3.3 Darcy (`--flow darcy`)
 
 ```math
-\mathbf{u}=-\kappa(\bar{\gamma})\nabla p,
-\qquad
+\mathbf{u}=-\kappa(\bar{\gamma})\nabla p.
+```
+
+```math
 -\nabla\cdot(\kappa\nabla p)=0.
 ```
 
@@ -184,7 +208,10 @@ pressure correction $`S=-DA^{-1}G+\varepsilon I`$
 (`stokes_kryl_iters` default $`200`$; $`0`$ skips it):
 
 ```math
-S\,\mathrm{d}p=-(\nabla\cdot\mathbf{u}(p_0)+\varepsilon p_0),\qquad
+S\,\mathrm{d}p=-(\nabla\cdot\mathbf{u}(p_0)+\varepsilon p_0).
+```
+
+```math
 p\leftarrow p_0+\mathrm{d}p.
 ```
 
@@ -217,14 +244,29 @@ J=-\frac{1}{|\Omega|}\int_\Omega T\,\mathrm{d}V=-\mathrm{mean}(T).
 ```
 
 `--hot` without `q_specs` turns uniform $`q`$ off. With both `--hot` and
-`--q-region`, $`J`$ stays $`-\mathrm{mean}(T)`$. Dirichlet-only:
+`--q-region`, $`J`$ stays $`-\mathrm{mean}(T)`$. Dirichlet-only, $`J`$ is
+the Fourier flux from hot patches into the rest of the plate:
 
 ```math
-J=Q_{\mathrm{hot}},
+Q_{\mathrm{faces}}
+=
+\sum k_b\frac{T_{\mathrm{hot}}-T_b}{\tfrac12\Delta x_n}\,A_b.
 ```
 
-the Fourier flux leaving `--hot` faces / boxes. The optimizer minimizes
-$`\mathcal{L}=-J`$.
+```math
+Q_{\mathrm{cells}}
+=
+\sum k_{i+1/2}\frac{T_{\mathrm{hot}}-T_{\mathrm{nbr}}}{\Delta x}\,A.
+```
+
+```math
+J=Q_{\mathrm{hot}}=Q_{\mathrm{faces}}+Q_{\mathrm{cells}}.
+```
+
+$`Q_{\mathrm{faces}}`$ is the half-cell flux on boundary Dirichlet faces.
+$`Q_{\mathrm{cells}}`$ is interior hot cells (box patches) dumping heat
+through harmonic faces into neighboring free cells. The optimizer
+minimizes $`\mathcal{L}=-J`$.
 
 Volume equality on the **physical** density, every iteration (no
 multiplier):
@@ -243,7 +285,7 @@ does not drift the volume).
 
 Stokes pins a one-cell fluid layer on port *design* cells
 **inside** the volume bisection (`keep_ports_open`) so the pin does not
-drift $\mathrm{mean}(\bar{\gamma})$ off $v^{*}$, then mirrors again.
+drift $`\mathrm{mean}(\bar{\gamma})`$ off $`v^{*}`$, then mirrors again.
 Neither the pin nor the mid-height channel seed is a PDE Dirichlet.
 Darcy does not pin ports.
 
@@ -264,14 +306,16 @@ residual `custom_vjp`:
 
 ```math
 \Bigl(\frac{\partial R}{\partial(\mathbf{u},p)}\Bigr)^\top\lambda
-=\frac{\partial J}{\partial(\mathbf{u},p)},
-\qquad
+=\frac{\partial J}{\partial(\mathbf{u},p)}.
+```
+
+```math
 \frac{\partial J}{\partial\bar{\gamma}}
 =-\lambda^\top\frac{\partial R}{\partial\bar{\gamma}}.
 ```
 
 Filter, RAMP, and tanh sit on the same `value_and_grad` tape, so
-sensitivities are w.r.t. raw $`\gamma`$. `jax_enable_x64` is set in
+sensitivities are with respect to the raw field $`\gamma`$. `jax_enable_x64` is set in
 `topoopt/__init__.py`.
 
 ## 7. Optimizer
@@ -294,7 +338,7 @@ Factories: `conduction_tree` / `custom_faces` / `localized_source` $`\to`$
    port mass error $`>0.15`$. Abort (`RunawaySolveError`) if $`T`$ is
    non-finite, $`T_{\max}>10^3`$, or a flow solve has a large energy
    residual and $`T_{\max}>50`$. Flow modes get no extra cold patch.
-3. Keep-best is **per $`\beta`$ level**. $`J`$ is not comparable across
+3. Keep-best is applied **at each $`\beta`$ level**. $`J`$ is not comparable across
    continuation ($`\bar{\gamma}(\beta)`$ changes). Iterates with relative
    energy residual $`>10^{-3}`$ (or RMS $`>10^{-2}`$ if relative is
    absent) are ignored, so an unconverged $`T`$ cannot win.
@@ -423,7 +467,7 @@ Article sources are kept locally and are not in this repository.
 | Energy Poisson | $`T=\sin\pi x\sin\pi y`$, $`T=0`$ on $`\partial\Omega`$ | order $`\approx 2`$ |
 | Advective energy | uniform $`\mathbf{u}`$ | order $`\gtrsim 1`$ |
 | Variable $`k`$ | discrete operator as source | residual $`\to 0`$ |
-| Helmholtz | $`\tilde{\gamma}=\cos\pi x\cos\pi y`$ (Neumann) | error $`\downarrow`$ under refinement; $`(-r^2\nabla^2+I)^{-1}(-r^2\nabla^2+I)`$ recovers $`\gamma`$ to Krylov tol |
+| Helmholtz | $`\tilde{\gamma}=\cos\pi x\cos\pi y`$ (Neumann) | error drops under refinement; applying the discrete Helmholtz operator then its inverse recovers $`\gamma`$ to Krylov tolerance |
 | Cone | spike / constant field | compact support $`d<r`$; constants unchanged |
 | Darcy | linear $`p`$, `port_frac=1` | small $`L^2`$ error |
 | Stokes | Poiseuille, full-height $`\Delta p`$, $`\alpha=0`$ | small $`L^2`$ error |
@@ -443,9 +487,9 @@ $`\beta_{\max}=32`$.
 - The cone support is $`r`$; Helmholtz (optional) has exponential tails
   and a thicker gray band of width $`\sim r`$. Tanh still leaves a
   gray interface of a few cells.
-- Brinkman solid leaks; first-order upwind adds diffusion at high $`\mathrm{Pe}`$.
+- Brinkman solids leak; first-order upwind adds diffusion at high $`\mathrm{Pe}`$.
 - Krylov caps: high-$`\beta`$ residuals can stay above $`10^{-2}`$ on
-  convective meshes larger than $`48^2`$ (BiCGSTAB). Smaller Pe$>0$
+  convective meshes larger than $`48^2`$ (BiCGSTAB). Smaller $`\mathrm{Pe}>0`$
   meshes factor the energy operator densely. Keep-best then returns
   the highest $`\beta`$ that still solved.
 - Conduction + small sink chatters for $`\beta\gtrsim 16`$; return the

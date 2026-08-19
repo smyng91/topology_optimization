@@ -37,6 +37,7 @@ outputs/
 *.vtk
 *.png
 !docs/figures/*.png
+harness.py
 
 # JAX / OS / editors
 .jax_cache/

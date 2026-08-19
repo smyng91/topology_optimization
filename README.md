@@ -13,22 +13,21 @@ for the tutorials). Prefer `--config conduction_tree` or
 Rendered docs: [GitHub wiki](https://github.com/smyng91/topology_optimization/wiki).
 
 ```math
--\nabla\cdot(k\nabla T)+\mathrm{Pe}\,\mathbf{u}\cdot\nabla T=q,
-\qquad
-\mathrm{mean}(\bar{\gamma})=v^{*},
-\qquad
-J=
-\begin{cases}
--\mathrm{mean}(T) & \text{volume source on},\\
-Q_{\mathrm{hot}} & \text{Dirichlet }T\text{ only}.
-\end{cases}
+-\nabla\cdot(k\nabla T)+\mathrm{Pe}\,\mathbf{u}\cdot\nabla T=q.
 ```
+
+```math
+\mathrm{mean}(\bar{\gamma})=v^{*}.
+```
+
+Volume source on: $`J=-\mathrm{mean}(T)`$. Dirichlet $`T`$ only: $`J=Q_{\mathrm{hot}}`$
+(Fourier flux from hot faces and hot cells into the rest of the plate).
 
 Flow is Stokes–Brinkman (default) or Darcy. Heat mode `conduction` /
 `convection` / `both` selects which terms are active — not the BCs.
 The density filter is the compact cone (`--filter helmholtz` for the PDE).
-Energy at `Pe = 0` uses CG; at `Pe > 0` a mesh with at most 48² cells
-factors the finite-volume operator densely, otherwise Jacobi BiCGSTAB.
+Energy at `Pe = 0` uses CG; at `Pe > 0`, a mesh with at most 48² cells
+factors the finite-volume operator densely; otherwise, Jacobi BiCGSTAB.
 
 ## Quickstart
 
@@ -62,17 +61,25 @@ go under `outputs/` (gitignored).
 | $`\tilde{\gamma}`$ | filtered | cone-filtered design (``--filter helmholtz`` for the PDE) |
 | $`\bar{\gamma}`$ | `phys` | tanh-projected density used in the PDEs |
 | $`\beta,\eta`$ | `beta`, `eta` | projection sharpness and threshold ($`\eta=0.5`$) |
-| $`r=r_{\min}\min(\Delta x,\Delta y)`$ | `rmin` | filter radius (`rmin` in cells) |
-| $`k,k_f,k_s`$ | `k`, `k_fluid`, `k_solid` | conductivity; $`k=\mathrm{RAMP}(\bar{\gamma};k_f,k_s,q_k)`$ except convection ($`k\equiv k_f`$) |
+| $`r`$ | `rmin` | filter radius (`rmin` in cells); $`r=r_{\min}\min(\Delta x,\Delta y)`$ |
+| $`k,k_f,k_s`$ | `k`, `k_fluid`, `k_solid` | conductivity; RAMP except convection ($`k\equiv k_f`$) |
 | $`\alpha`$ | Brinkman | solid drag (Borrvall–Petersson) |
-| $`\kappa`$ | Darcy | permeability $`\mathrm{RAMP}(\bar{\gamma};\kappa_{\max},\kappa_{\min},q_\kappa)`$ |
+| $`\kappa`$ | Darcy | permeability (RAMP from $`\kappa_{\max}`$ to $`\kappa_{\min}`$) |
 | $`q`$ | `q_vol` / `q_specs` | volumetric heat: uniform, or only on `--q-region` |
 | $`\mathrm{Pe}`$ | `pe` | Péclet; $`0`$ in conduction |
 | $`T,\mathbf{u},p`$ | `T`, `face_vel`, `p` | temperature, MAC velocity, pressure |
 | $`v^{*}`$ | `vol_frac` | target $`\mathrm{mean}(\bar{\gamma})`$ |
-| $`J`$ | `J` | $`-\mathrm{mean}(T)`$ if $`q\neq 0`$; else heat leaving `--hot` |
-| $`\ell=\ell_0/\sqrt{\max(\beta,1)}`$ | `lr` | move limit; `--lr` is $`\ell_0`$ at $`\beta=1`$ |
+| $`J`$ | `J` | $`-\mathrm{mean}(T)`$ if a volume source is on; else $`Q_{\mathrm{hot}}`$ |
+| $`\ell`$ | `lr` | move limit; `--lr` is $`\ell_0`$ at $`\beta=1`$ |
 | $`\varepsilon`$ | `div_eps` | Stokes continuity regularizer $`\varepsilon p`$ |
+
+```math
+r=r_{\min}\min(\Delta x,\Delta y).
+```
+
+```math
+\ell=\ell_0/\sqrt{\max(\beta,1)}.
+```
 
 `--hot` / `--cold` prescribe Dirichlet $`T`$ (and turn off *uniform* $`q`$).
 `--q-region` generates heat on a face or box; $`T`$ still floats. Specs:
@@ -138,7 +145,7 @@ python examples/gallery.py                      # 80×80 sweep, not a tutorial
 python examples/publish_figures.py              # docs/figures/ snapshots
 ```
 
-Returned design is the best-$`J`$ iterate at the **highest $`\beta`$**
+The returned design is the best-$`J`$ iterate at the **highest $`\beta`$**
 that passes every evidence gate (energy, volume, symmetry, and flow
 residuals). There is no fallback to an unconverged iterate. Flow modes
 have no extra cold patch; a sealed channel aborts.
